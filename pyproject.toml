@@ -1,0 +1,27 @@
+[project]
+name = "play-lmp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Jon Goikoetxea", email = "jon.goikoetxea.m@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "language-table",
+]
+
+[project.scripts]
+play-lmp = "play_lmp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+language-table = { git = "https://github.com/google-research/language-table" }
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.2.0",
+]
