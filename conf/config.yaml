@@ -2,5 +2,8 @@ random_seed: 42
 training:
   tf_dataset_path: data/language_table_sim/
   shuffle_buffer_size: 1024
+  val_split_proportion: 0.02
+  test_split_proportion: 0.05
+  normalization_stats_path: normalization_stats.npy
   sequence_padding_length: 128
   batch_size: 32
