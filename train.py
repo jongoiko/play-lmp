@@ -76,11 +76,13 @@ def get_dataset(
         dataset.repeat()
         .shuffle(buffer_size=cfg.training.shuffle_buffer_size, seed=cfg.random_seed)
         .flat_map(
-            lambda x: x["steps"].apply(
+            lambda x: x["steps"]
+            .take(cfg.training.sequence_padding_length)
+            .apply(
                 tf.data.experimental.pad_to_cardinality(
                     cfg.training.sequence_padding_length
                 )
-            ),
+            )
         )
         .batch(cfg.training.sequence_padding_length)
         .batch(cfg.training.batch_size)
