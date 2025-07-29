@@ -352,6 +352,21 @@ wheels = [
 ]
 
 [[package]]
+name = "equinox"
+version = "0.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jax" },
+    { name = "jaxtyping" },
+    { name = "typing-extensions" },
+    { name = "wadler-lindig" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bb/ad/c538b895e3f1290738b7a5eccd9c91b132e6f7ee13958a82ee8e4465f137/equinox-0.13.0.tar.gz", hash = "sha256:d59615be722373e9d66e0ba78462964e6357fb76a8b1b98c2c6027961b778a69", size = 137892 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/9a/3d0699b268d9c2794f12e1c202626293170662cd9f7d4f9ad5817d9496f6/equinox-0.13.0-py3-none-any.whl", hash = "sha256:66720e6f39b4907812e2c5912ca523d698293f6f1d25736362b174f426b02c49", size = 177703 },
+]
+
+[[package]]
 name = "etils"
 version = "1.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1556,6 +1571,7 @@ name = "play-lmp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "equinox" },
     { name = "hydra-core" },
     { name = "jax", extra = ["cuda12"] },
     { name = "jaxtyping" },
@@ -1570,6 +1586,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "equinox", specifier = ">=0.13.0" },
     { name = "hydra-core", specifier = ">=1.3.2" },
     { name = "jax", extras = ["cuda12"], specifier = ">=0.7.0" },
     { name = "jaxtyping", specifier = ">=0.3.2" },
