@@ -37,12 +37,11 @@ def play_lmp_loss(
         batch.rgb_observations[:, -1, ...],
         sampled_plans,
     )
-    vae_elbo = -jax.vmap(sequence_mse_loss)(
+    reconstruction_loss = jax.vmap(sequence_mse_loss)(
         batch.actions, predicted_actions, batch.episode_lengths
     )
-    vae_elbo = vae_elbo - jax.vmap(kl_div_01_gaussian)(state_goal_plans)
     plan_kl_loss = jax.vmap(kl_div_diagonal_gaussians)(state_goal_plans, sequence_plans)
-    loss = -vae_elbo + beta * plan_kl_loss
+    loss = reconstruction_loss + beta * plan_kl_loss
     return jnp.mean(loss)
 
 
@@ -61,15 +60,13 @@ def sequence_mse_loss(
     return jnp.mean(errors, where=jnp.arange(y_real.shape[0]) < sequence_length)
 
 
-def kl_div_01_gaussian(gaussian_params: Float[Array, "2 d_latent"]) -> Float[Array, ""]:
-    mean, stddev = gaussian_params
-    var = jnp.square(stddev)
-    return 0.5 * jnp.sum(-jnp.log(var) - 1.0 + var + jnp.square(mean))
-
-
 def kl_div_diagonal_gaussians(
     gaussian_params_p: Float[Array, "2 d_latent"],
     gaussian_params_q: Float[Array, "2 d_latent"],
 ) -> Float[Array, ""]:
-    # TODO
-    return jnp.asarray(1)
+    mean_p, stddev_p = gaussian_params_p
+    mean_q, stddev_q = gaussian_params_q
+    var_p, var_q = jnp.square(stddev_p), jnp.square(stddev_q)
+    return 0.5 * jnp.sum(
+        (var_p + jnp.square(mean_p - mean_q)) / var_q + jnp.log(var_q / var_p) - 1
+    )
