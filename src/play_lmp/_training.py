@@ -7,7 +7,7 @@ from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import Int
 
-from ._nn import PlayLMP
+from ._play_lmp import PlayLMP
 
 
 @jax.tree_util.register_dataclass

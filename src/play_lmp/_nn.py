@@ -8,6 +8,10 @@ from jaxtyping import Float
 from jaxtyping import Int
 from jaxtyping import Int8
 
+from ._play_lmp import AbstractPlanProposalNetwork
+from ._play_lmp import AbstractPlanRecognitionNetwork
+from ._play_lmp import AbstractPolicyNetwork
+
 
 def preprocess_image(
     image: Int8[Array, "height width channel"],
@@ -147,7 +151,7 @@ class TransformerBlock(eqx.Module):
         return x
 
 
-class PlanRecognitionTransformer:
+class PlanRecognitionTransformer(AbstractPlanRecognitionNetwork):
     transformer_blocks: list[TransformerBlock]
     cnn: CNNEncoder
     z_linear: eqx.nn.Linear
@@ -194,7 +198,7 @@ class PlanRecognitionTransformer:
         return jnp.stack([mean, stddev])
 
 
-class PlanProposalNetwork:
+class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
     cnn: CNNEncoder
     net: eqx.nn.Sequential
 
@@ -229,7 +233,7 @@ class PlanProposalNetwork:
         return jnp.stack([mean, stddev])
 
 
-class PolicyNetwork(eqx.Module):
+class MLPPolicyNetwork(AbstractPolicyNetwork):
     cnn: CNNEncoder
     net: eqx.nn.Sequential
 
@@ -276,40 +280,3 @@ class PolicyNetwork(eqx.Module):
             axis=1,
         )
         return jax.vmap(self.net)(input_features)
-
-
-class PlayLMP(eqx.Module):
-    plan_recognizer: PlanRecognitionTransformer
-    plan_proposal: PlanProposalNetwork
-    policy: PolicyNetwork
-
-    def __init__(
-        self,
-        plan_recognizer: PlanRecognitionTransformer,
-        plan_proposal: PlanProposalNetwork,
-        policy: PolicyNetwork,
-    ):
-        self.plan_recognizer = plan_recognizer
-        self.plan_proposal = plan_proposal
-        self.policy = policy
-
-    def __call__(
-        self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
-        sequence_length: Int[Array, ""],
-    ) -> Float[Array, "2 2 d_latent"]:
-        sequence_plan = self.plan_recognizer(
-            rgb_observations, proprio_observations, sequence_length
-        )
-        state_goal_plan = self.plan_proposal(
-            rgb_observations[0], proprio_observations[0], rgb_observations[-1]
-        )
-        return jnp.stack([sequence_plan, state_goal_plan])
-
-    def sample_plan(
-        self, params: Float[Array, "2 d_latent"], key: jax.Array
-    ) -> Float[Array, " d_latent"]:
-        eps = jax.random.normal(key, (params.shape[1],))
-        sampled = eps * params[1] + params[0]
-        return sampled
