@@ -2,6 +2,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from einops import rearrange
+from einops import repeat
 from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import Int
@@ -226,3 +227,89 @@ class PlanProposalNetwork:
         )
         stddev = jax.nn.softplus(stddev)
         return jnp.stack([mean, stddev])
+
+
+class PolicyNetwork(eqx.Module):
+    cnn: CNNEncoder
+    net: eqx.nn.Sequential
+
+    def __init__(
+        self,
+        d_proprio: int,
+        d_latent_plan: int,
+        d_action: int,
+        cnn: CNNEncoder,
+        key: jax.Array,
+    ):
+        self.cnn = cnn
+        keys = jax.random.split(key, 4)
+        self.net = eqx.nn.Sequential(
+            [
+                eqx.nn.Linear(
+                    d_proprio + 2 * cnn.features_dim + d_latent_plan, 2048, key=keys[0]
+                ),
+                eqx.nn.Lambda(jax.nn.relu),
+                eqx.nn.Linear(2048, 2048, key=keys[1]),
+                eqx.nn.Lambda(jax.nn.relu),
+                eqx.nn.Linear(2048, 512, key=keys[2]),
+                eqx.nn.Lambda(jax.nn.relu),
+                eqx.nn.Linear(512, d_action, key=keys[3]),
+            ]
+        )
+
+    def __call__(
+        self,
+        rgb_observations: Float[Array, "time height width channel"],
+        proprio_observations: Float[Array, "time d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        plan: Float[Array, " d_latent"],
+    ) -> Float[Array, "time d_action"]:
+        image_features = jax.vmap(self.cnn)(rgb_observations)
+        sequence_length = rgb_observations.shape[0]
+        input_features = jnp.concat(
+            [
+                image_features,
+                proprio_observations,
+                repeat(self.cnn(rgb_goal), "... -> n ...", n=sequence_length),
+                repeat(plan, "... -> n ...", n=sequence_length),
+            ],
+            axis=1,
+        )
+        return jax.vmap(self.net)(input_features)
+
+
+class PlayLMP(eqx.Module):
+    plan_recognizer: PlanRecognitionTransformer
+    plan_proposal: PlanProposalNetwork
+    policy: PolicyNetwork
+
+    def __init__(
+        self,
+        plan_recognizer: PlanRecognitionTransformer,
+        plan_proposal: PlanProposalNetwork,
+        policy: PolicyNetwork,
+    ):
+        self.plan_recognizer = plan_recognizer
+        self.plan_proposal = plan_proposal
+        self.policy = policy
+
+    def __call__(
+        self,
+        rgb_observations: Float[Array, "time height width channel"],
+        proprio_observations: Float[Array, "time d_proprio"],
+        sequence_length: Int[Array, ""],
+    ) -> Float[Array, "2 2 d_latent"]:
+        sequence_plan = self.plan_recognizer(
+            rgb_observations, proprio_observations, sequence_length
+        )
+        state_goal_plan = self.plan_proposal(
+            rgb_observations[0], proprio_observations[0], rgb_observations[-1]
+        )
+        return jnp.stack([sequence_plan, state_goal_plan])
+
+    def sample_plan(
+        self, params: Float[Array, "2 d_latent"], key: jax.Array
+    ) -> Float[Array, " d_latent"]:
+        eps = jax.random.normal(key, (params.shape[1],))
+        sampled = eps * params[1] + params[0]
+        return sampled
