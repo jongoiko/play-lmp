@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import cast
 from typing import Literal
@@ -13,6 +14,8 @@ from jaxtyping import Array
 from jaxtyping import Float
 from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
+from play_lmp import preprocess_image
+from play_lmp import preprocess_proprio
 from tqdm import tqdm
 
 
@@ -22,15 +25,41 @@ def main(cfg: DictConfig) -> None:
     dataset = get_dataset(cfg, "train")
     rgb_stats, proprio_stats = get_normalization_stats(cfg)
     for batch in dataset:
-        episode_batch = tfds_batch_to_episode_batch(batch)  # type: ignore
+        episode_batch = tfds_batch_to_episode_batch(
+            cast(dict, batch), (128, 128), rgb_stats, proprio_stats
+        )
         # TODO: Training loop on episode_batch
         del episode_batch
     del random_key
 
 
-def tfds_batch_to_episode_batch(batch: dict) -> EpisodeBatch:
+def tfds_batch_to_episode_batch(
+    batch: dict,
+    target_image_size: tuple[int, int],
+    rgb_stats: Float[Array, "2 channel"],
+    proprio_stats: Float[Array, "2 d_proprio"],
+) -> EpisodeBatch:
     rgb_observations = jnp.asarray(batch["observation"]["rgb"])
+    rgb_observations = jax.jit(
+        jax.vmap(
+            jax.vmap(
+                partial(
+                    preprocess_image,
+                    target_size=target_image_size + (3,),
+                    channel_mean=rgb_stats[0],
+                    channel_std=rgb_stats[1],
+                )
+            )
+        )
+    )(rgb_observations)
     proprio_observations = jnp.asarray(batch["observation"]["effector_translation"])
+    proprio_observations = jax.jit(
+        jax.vmap(
+            jax.vmap(
+                partial(preprocess_proprio, mean=proprio_stats[0], std=proprio_stats[1])
+            )
+        )
+    )(proprio_observations)
     actions = jnp.asarray(batch["action"])
     # The "valid" key is introduced by `pad_to_cardinality`
     episode_lengths = jnp.asarray(batch["valid"]).sum(axis=1)

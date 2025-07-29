@@ -19,6 +19,14 @@ def preprocess_image(
     return resized
 
 
+def preprocess_proprio(
+    proprio: Float[Array, " d_proprio"],
+    mean: Float[Array, " d_proprio"],
+    std: Float[Array, " d_proprio"],
+) -> Float[Array, " d_proprio"]:
+    return (proprio - mean) / std
+
+
 class CNNEncoder(eqx.Module):
     net: eqx.nn.Sequential
     features_dim: int
