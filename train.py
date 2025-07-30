@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 from typing import Literal
 
+import equinox as eqx
 import hydra
 import jax
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from jaxtyping import Array
 from jaxtyping import Float
 from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
+from play_lmp import PlayLMP
 from play_lmp import preprocess_image
 from play_lmp import preprocess_proprio
 from tqdm import tqdm
@@ -24,6 +26,9 @@ def main(cfg: DictConfig) -> None:
     random_key = jax.random.PRNGKey(cfg.random_seed)
     dataset = get_dataset(cfg, "train")
     rgb_stats, proprio_stats = get_normalization_stats(cfg)
+    random_key, model_key = jax.random.split(random_key)
+    model = get_model(cfg.model, model_key)
+    print(f"Total trainable parameters: {num_model_parameters(model):_}")
     for batch in dataset:
         episode_batch = tfds_batch_to_episode_batch(
             cast(dict, batch), (128, 128), rgb_stats, proprio_stats
@@ -31,6 +36,25 @@ def main(cfg: DictConfig) -> None:
         # TODO: Training loop on episode_batch
         del episode_batch
     del random_key
+
+
+def get_model(cfg: DictConfig, key: jax.Array) -> PlayLMP:
+    cnn_key, plan_rec_key, plan_proposal_key, policy_key = jax.random.split(key, 4)
+    cnn = hydra.utils.instantiate(cfg.cnn)(key=cnn_key)
+    plan_recognizer = hydra.utils.instantiate(cfg.plan_recognizer)(
+        cnn=cnn, key=plan_rec_key
+    )
+    plan_proposal = hydra.utils.instantiate(cfg.plan_proposal)(
+        cnn=cnn, key=plan_proposal_key
+    )
+    policy = hydra.utils.instantiate(cfg.policy)(cnn=cnn, key=policy_key)
+    model = PlayLMP(plan_recognizer, plan_proposal, policy)
+    return model
+
+
+def num_model_parameters(model: eqx.Module) -> int:
+    filtered_model = eqx.filter(model, eqx.is_array)
+    return sum(leaf.size for leaf in jax.tree_util.tree_leaves(filtered_model))
 
 
 def tfds_batch_to_episode_batch(

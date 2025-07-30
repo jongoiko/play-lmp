@@ -5,5 +5,32 @@ training:
   val_split_proportion: 0.02
   test_split_proportion: 0.05
   normalization_stats_path: normalization_stats.npy
-  sequence_padding_length: 128
-  batch_size: 32
+  sequence_padding_length: 32
+  batch_size: 4
+model:
+  d_proprio: 2
+  d_latent: 256
+  cnn:
+    _partial_: true
+    _target_: play_lmp.CNNEncoder
+    final_dim: 64
+  plan_recognizer:
+    _partial_: true
+    _target_: play_lmp.PlanRecognitionTransformer
+    num_layers: 6
+    d_proprio: ${model.d_proprio}
+    num_heads: 8
+    ff_dim: 256
+    d_latent: ${model.d_latent}
+    rope_theta: 10000
+  plan_proposal:
+    _partial_: true
+    _target_: play_lmp.MLPPlanProposalNetwork
+    d_proprio: ${model.d_proprio}
+    d_latent: ${model.d_latent}
+  policy:
+    _partial_: true
+    _target_: play_lmp.MLPPolicyNetwork
+    d_proprio: ${model.d_proprio}
+    d_latent_plan: ${model.d_latent}
+    d_action: 2
