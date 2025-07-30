@@ -67,7 +67,9 @@ class PlayLMP(eqx.Module):
             rgb_observations, proprio_observations, sequence_length
         )
         state_goal_plan = self.plan_proposal(
-            rgb_observations[0], proprio_observations[0], rgb_observations[-1]
+            rgb_observations[0],
+            proprio_observations[0],
+            rgb_observations[sequence_length - 1],
         )
         return jnp.stack([sequence_plan, state_goal_plan])
 
