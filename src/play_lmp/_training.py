@@ -30,11 +30,16 @@ def play_lmp_loss(
     )
     num_sequences = batch.rgb_observations.shape[0]
     sampling_keys = jax.random.split(key, num_sequences)
-    sampled_plans = jax.vmap(model.sample_plan)(state_goal_plans, sampling_keys)
+    sampled_plans = jax.vmap(model.sample_plan)(sequence_plans, sampling_keys)
+    goals = batch.rgb_observations[
+        jnp.arange(num_sequences),
+        batch.episode_lengths - 1,
+        ...,
+    ]
     predicted_actions = jax.vmap(model.policy)(
         batch.rgb_observations,
         batch.proprio_observations,
-        batch.rgb_observations[:, -1, ...],
+        goals,
         sampled_plans,
     )
     reconstruction_loss = jax.vmap(sequence_mse_loss)(
