@@ -201,10 +201,12 @@ class PlanRecognitionTransformer(AbstractPlanRecognitionNetwork):
 class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
     cnn: CNNEncoder
     net: eqx.nn.Sequential
+    d_latent: int
 
     def __init__(self, d_proprio: int, d_latent: int, cnn: CNNEncoder, key: jax.Array):
         self.cnn = cnn
         keys = jax.random.split(key, 4)
+        self.d_latent = d_latent
         self.net = eqx.nn.Sequential(
             [
                 eqx.nn.Linear(d_proprio + 2 * cnn.features_dim, 2048, key=keys[0]),

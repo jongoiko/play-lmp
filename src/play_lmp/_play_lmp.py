@@ -20,6 +20,8 @@ class AbstractPlanRecognitionNetwork(eqx.Module):
 
 
 class AbstractPlanProposalNetwork(eqx.Module):
+    d_latent: eqx.AbstractVar[int]
+
     @abc.abstractmethod
     def __call__(
         self,
