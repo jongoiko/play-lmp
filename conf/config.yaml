@@ -6,7 +6,13 @@ training:
   test_split_proportion: 0.05
   normalization_stats_path: normalization_stats.npy
   sequence_padding_length: 32
-  batch_size: 4
+  batch_size: 32
+  optimizer:
+    _target_: optax.adamw
+    learning_rate: 5e-4
+  num_steps: 1000
+  method: play-gcbc
+  beta: 0.5
 model:
   d_proprio: 2
   d_latent: 256

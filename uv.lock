@@ -1576,6 +1576,7 @@ dependencies = [
     { name = "jax", extra = ["cuda12"] },
     { name = "jaxtyping" },
     { name = "language-table" },
+    { name = "optax" },
     { name = "tqdm" },
 ]
 
@@ -1591,6 +1592,7 @@ requires-dist = [
     { name = "jax", extras = ["cuda12"], specifier = ">=0.7.0" },
     { name = "jaxtyping", specifier = ">=0.3.2" },
     { name = "language-table", git = "https://github.com/google-research/language-table" },
+    { name = "optax", specifier = ">=0.2.5" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
 

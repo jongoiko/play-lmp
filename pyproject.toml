@@ -13,6 +13,7 @@ dependencies = [
     "jax[cuda12]>=0.7.0",
     "jaxtyping>=0.3.2",
     "language-table",
+    "optax>=0.2.5",
     "tqdm>=4.67.1",
 ]
 

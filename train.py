@@ -9,12 +9,14 @@ import equinox as eqx
 import hydra
 import jax
 import jax.numpy as jnp
+import optax
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from jaxtyping import Array
 from jaxtyping import Float
 from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
+from play_lmp import make_train_step
 from play_lmp import PlayLMP
 from play_lmp import preprocess_image
 from play_lmp import preprocess_proprio
@@ -29,13 +31,18 @@ def main(cfg: DictConfig) -> None:
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, model_key)
     print(f"Total trainable parameters: {num_model_parameters(model):_}")
-    for batch in dataset:
-        episode_batch = tfds_batch_to_episode_batch(
-            cast(dict, batch), (128, 128), rgb_stats, proprio_stats
-        )
-        # TODO: Training loop on episode_batch
-        del episode_batch
-    del random_key
+    optimizer: optax.GradientTransformation = hydra.utils.instantiate(
+        cfg.training.optimizer
+    )
+    train(
+        cfg.training,
+        model,
+        optimizer,
+        dataset,
+        rgb_stats,
+        proprio_stats,
+        key=random_key,
+    )
 
 
 def get_model(cfg: DictConfig, key: jax.Array) -> PlayLMP:
@@ -50,6 +57,33 @@ def get_model(cfg: DictConfig, key: jax.Array) -> PlayLMP:
     policy = hydra.utils.instantiate(cfg.policy)(cnn=cnn, key=policy_key)
     model = PlayLMP(plan_recognizer, plan_proposal, policy)
     return model
+
+
+def train(
+    cfg: DictConfig,
+    model: PlayLMP,
+    optimizer: optax.GradientTransformation,
+    dataset: tf.data.Dataset,
+    rgb_normalization_stats: Array,
+    proprio_normalization_stats: Array,
+    key: jax.Array,
+) -> None:
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
+    for step, batch in zip(range(cfg.num_steps), dataset):
+        key, step_key = jax.random.split(key)
+        episode_batch = tfds_batch_to_episode_batch(
+            batch, (128, 128), rgb_normalization_stats, proprio_normalization_stats
+        )
+        model, opt_state, loss = eqx.filter_jit(make_train_step)(
+            model,
+            optimizer,
+            opt_state,
+            episode_batch,
+            step_key,
+            method=cfg.method,
+            beta=cfg.beta,
+        )
+        print(f"Step {step}: Training loss {loss}")
 
 
 def num_model_parameters(model: eqx.Module) -> int:

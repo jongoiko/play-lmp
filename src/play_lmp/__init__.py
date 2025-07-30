@@ -7,4 +7,4 @@ from ._nn import preprocess_image
 from ._nn import preprocess_proprio
 from ._play_lmp import PlayLMP
 from ._training import EpisodeBatch
-from ._training import play_lmp_loss
+from ._training import make_train_step

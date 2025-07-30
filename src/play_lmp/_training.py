@@ -1,11 +1,15 @@
 import dataclasses
+from typing import Literal
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import optax
 from einops import rearrange
 from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import Int
+from jaxtyping import PyTree
 
 from ._play_lmp import PlayLMP
 
@@ -17,6 +21,26 @@ class EpisodeBatch:
     proprio_observations: Float[Array, "batch time d_proprio"]
     actions: Float[Array, "batch time d_action"]
     episode_lengths: Int[Array, " batch"]
+
+
+def make_train_step(
+    model: PlayLMP,
+    optim: optax.GradientTransformation,
+    opt_state: PyTree,
+    batch: EpisodeBatch,
+    key: jax.Array,
+    method: Literal["play-lmp", "play-gcbc"],
+    beta: float = 0.0,
+) -> tuple[PlayLMP, PyTree, Float[Array, ""]]:
+    if method == "play-gcbc":
+        loss_value, grads = eqx.filter_value_and_grad(play_gcbc_loss)(model, batch)
+    elif method == "play-lmp":
+        loss_value, grads = eqx.filter_value_and_grad(play_lmp_loss)(
+            model, batch, key, beta
+        )
+    updates, opt_state = optim.update(grads, opt_state, eqx.filter(model, eqx.is_array))
+    model = eqx.apply_updates(model, updates)
+    return model, opt_state, loss_value
 
 
 def play_lmp_loss(
