@@ -4,7 +4,7 @@ training:
   shuffle_buffer_size: 1024
   val_split_proportion: 0.02
   test_split_proportion: 0.05
-  normalization_stats_path: normalization_stats.npy
+  normalization_stats_path: normalization_stats.npz
   tensorboard_log_dir: logs/%Y-%m-%d_%H-%M-%S/
   sequence_padding_length: 32
   batch_size: 32

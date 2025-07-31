@@ -13,6 +13,7 @@ with install_import_hook("play_lmp", "beartype.beartype"):
     from ._nn import PlanRecognitionTransformer
     from ._nn import preprocess_image
     from ._nn import preprocess_proprio
+    from ._nn import preprocess_action
     from ._play_lmp import PlayLMP
     from ._training import EpisodeBatch
     from ._training import make_train_step
