@@ -28,7 +28,7 @@ model:
     num_heads: 8
     ff_dim: 256
     d_latent: ${model.d_latent}
-    rope_theta: 10000
+    rope_theta: 10000.0
   plan_proposal:
     _partial_: true
     _target_: play_lmp.MLPPlanProposalNetwork

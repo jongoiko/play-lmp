@@ -6,7 +6,7 @@ from einops import repeat
 from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import Int
-from jaxtyping import Int8
+from jaxtyping import UInt8
 
 from ._play_lmp import AbstractPlanProposalNetwork
 from ._play_lmp import AbstractPlanRecognitionNetwork
@@ -14,11 +14,11 @@ from ._play_lmp import AbstractPolicyNetwork
 
 
 def preprocess_image(
-    image: Int8[Array, "height width channel"],
+    image: UInt8[Array, "height width channel"],
     target_size: tuple[int, int, int],
     channel_mean: Float[Array, " channel"],
     channel_std: Float[Array, " channel"],
-) -> Float[Array, "height width channel"]:
+) -> Float[Array, "target_height target_width channel"]:
     normalized = ((image / 255) - channel_mean) / channel_std
     resized = jax.image.resize(normalized, target_size, "linear")
     return resized
