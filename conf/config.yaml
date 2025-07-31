@@ -37,7 +37,7 @@ model:
     d_latent: ${model.d_latent}
   policy:
     _partial_: true
-    _target_: play_lmp.MLPPolicyNetwork
+    _target_: play_lmp.LSTMPolicyNetwork
     d_proprio: ${model.d_proprio}
     d_latent_plan: ${model.d_latent}
     d_action: 2
