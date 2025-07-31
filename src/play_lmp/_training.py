@@ -75,22 +75,29 @@ def play_lmp_loss(
 
 
 def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
-    num_sequences = batch.rgb_observations.shape[0]
-    goals = batch.rgb_observations[
-        jnp.arange(num_sequences),
-        batch.episode_lengths - 1,
-        ...,
-    ]
-    predicted_actions = jax.vmap(model.policy)(
+    def instance_loss(
+        rgb_observations: Float[Array, "time height width channel"],
+        proprio_observations: Float[Array, "time d_proprio"],
+        actions: Float[Array, "time d_action"],
+        episode_length: Int[Array, ""],
+    ) -> Float[Array, ""]:
+        rgb_goal = rgb_observations[episode_length - 1]
+        predicted_actions = model.policy(
+            rgb_observations,
+            proprio_observations,
+            rgb_goal,
+            jnp.zeros(model.plan_proposal.d_latent),
+        )
+        loss = sequence_mse_loss(actions, predicted_actions, episode_length)
+        return loss
+
+    batch_losses = jax.vmap(instance_loss)(
         batch.rgb_observations,
         batch.proprio_observations,
-        goals,
-        jnp.zeros((num_sequences, model.plan_proposal.d_latent)),
+        batch.actions,
+        batch.episode_lengths,
     )
-    loss = jax.vmap(sequence_mse_loss)(
-        batch.actions, predicted_actions, batch.episode_lengths
-    )
-    return jnp.mean(loss)
+    return jnp.mean(batch_losses)
 
 
 def sequence_mse_loss(
