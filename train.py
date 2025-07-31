@@ -107,13 +107,15 @@ def tfds_batch_to_episode_batch(
     rgb_observations = jnp.asarray(batch["observation"]["rgb"])
     rgb_observations = jax.jit(
         jax.vmap(
-            jax.vmap(
+            lambda sequence: jax.lax.map(
                 partial(
                     preprocess_image,
                     target_size=target_image_size + (3,),
                     channel_mean=rgb_stats[0],
                     channel_std=rgb_stats[1],
-                )
+                ),
+                sequence,
+                batch_size=8,
             )
         )
     )(rgb_observations)
