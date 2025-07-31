@@ -1,6 +1,6 @@
 random_seed: 42
 training:
-  tf_dataset_path: data/language_table_sim/
+  tf_dataset_path: data/language_table_blocktoblock_4block_sim/
   shuffle_buffer_size: 1024
   val_split_proportion: 0.02
   test_split_proportion: 0.05
@@ -13,7 +13,7 @@ training:
     learning_rate: 5e-4
   num_steps: 1000
   method: play-gcbc
-  beta: 0.5
+  beta: 0.01
 model:
   d_proprio: 2
   d_latent: 256
