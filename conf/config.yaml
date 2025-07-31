@@ -5,6 +5,7 @@ training:
   val_split_proportion: 0.02
   test_split_proportion: 0.05
   normalization_stats_path: normalization_stats.npy
+  tensorboard_log_dir: logs/%Y-%m-%d_%H-%M-%S/
   sequence_padding_length: 32
   batch_size: 32
   optimizer:

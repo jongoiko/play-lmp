@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from functools import partial
 from pathlib import Path
 from typing import cast
@@ -69,21 +70,27 @@ def train(
     key: jax.Array,
 ) -> None:
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
-    for step, batch in zip(range(cfg.num_steps), dataset):
-        key, step_key = jax.random.split(key)
-        episode_batch = tfds_batch_to_episode_batch(
-            batch, (128, 128), rgb_normalization_stats, proprio_normalization_stats
-        )
-        model, opt_state, loss = eqx.filter_jit(make_train_step)(
-            model,
-            optimizer,
-            opt_state,
-            episode_batch,
-            step_key,
-            method=cfg.method,
-            beta=cfg.beta,
-        )
-        print(f"Step {step}: Training loss {loss}")
+    tb_writer = tf.summary.create_file_writer(
+        datetime.datetime.now().strftime(cfg.tensorboard_log_dir)
+    )
+    with tb_writer.as_default():
+        for step, batch in zip(range(cfg.num_steps), dataset):
+            key, step_key = jax.random.split(key)
+            episode_batch = tfds_batch_to_episode_batch(
+                batch, (128, 128), rgb_normalization_stats, proprio_normalization_stats
+            )
+            model, opt_state, loss = eqx.filter_jit(make_train_step)(
+                model,
+                optimizer,
+                opt_state,
+                episode_batch,
+                step_key,
+                method=cfg.method,
+                beta=cfg.beta,
+            )
+            tf.summary.scalar("loss", float(loss), step=step)
+            tb_writer.flush()
+            print(f"Step {step}: Training loss {loss}")
 
 
 def num_model_parameters(model: eqx.Module) -> int:
