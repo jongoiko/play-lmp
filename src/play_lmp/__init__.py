@@ -1,5 +1,6 @@
 # ruff: noqa: F401
 from ._nn import CNNEncoder
+from ._nn import LSTMPolicyNetwork
 from ._nn import MLPPlanProposalNetwork
 from ._nn import MLPPolicyNetwork
 from ._nn import PlanRecognitionTransformer

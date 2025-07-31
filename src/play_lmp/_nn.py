@@ -282,3 +282,63 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
             axis=1,
         )
         return jax.vmap(self.net)(input_features)
+
+
+class LSTMPolicyNetwork(AbstractPolicyNetwork):
+    cnn: CNNEncoder
+    cell: eqx.nn.LSTMCell
+    mlp: eqx.nn.Sequential
+
+    def __init__(
+        self,
+        d_proprio: int,
+        d_latent_plan: int,
+        d_action: int,
+        cnn: CNNEncoder,
+        key: jax.Array,
+    ):
+        self.cnn = cnn
+        lstm_key, mlp_key = jax.random.split(key)
+        self.cell = eqx.nn.LSTMCell(
+            d_proprio + 2 * cnn.features_dim + d_latent_plan, 2048, key=lstm_key
+        )
+        mlp_keys = jax.random.split(mlp_key, 2)
+        self.mlp = eqx.nn.Sequential(
+            [
+                eqx.nn.Linear(self.cell.hidden_size, 512, key=mlp_keys[0]),
+                eqx.nn.Lambda(jax.nn.relu),
+                eqx.nn.Linear(512, d_action, key=mlp_keys[1]),
+            ]
+        )
+
+    def __call__(
+        self,
+        rgb_observations: Float[Array, "time height width channel"],
+        proprio_observations: Float[Array, "time d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        plan: Float[Array, " d_latent"],
+    ) -> Float[Array, "time d_action"]:
+        image_features = jax.vmap(self.cnn)(rgb_observations)
+        sequence_length = rgb_observations.shape[0]
+        input_features = jnp.concat(
+            [
+                image_features,
+                proprio_observations,
+                repeat(self.cnn(rgb_goal), "... -> n ...", n=sequence_length),
+                repeat(plan, "... -> n ...", n=sequence_length),
+            ],
+            axis=1,
+        )
+
+        def lstm_scan(
+            state: tuple[Array, Array], input: Array
+        ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
+            output = self.cell(input, state)
+            return output, output
+
+        init_state = (
+            jnp.zeros(self.cell.hidden_size),
+            jnp.zeros(self.cell.hidden_size),
+        )
+        _, (hidden_states, _) = jax.lax.scan(lstm_scan, init_state, input_features)
+        return jax.vmap(self.mlp)(hidden_states)
