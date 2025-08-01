@@ -212,23 +212,22 @@ class PlanRecognitionTransformer(AbstractPlanRecognitionNetwork):
 
 class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
     cnn: CNNEncoder
-    net: eqx.nn.Sequential
+    mlp: eqx.nn.MLP
     d_latent: int
 
-    def __init__(self, d_proprio: int, d_latent: int, cnn: CNNEncoder, key: jax.Array):
+    def __init__(
+        self,
+        d_proprio: int,
+        d_latent: int,
+        width_size: int,
+        depth: int,
+        cnn: CNNEncoder,
+        key: jax.Array,
+    ):
         self.cnn = cnn
-        keys = jax.random.split(key, 4)
         self.d_latent = d_latent
-        self.net = eqx.nn.Sequential(
-            [
-                eqx.nn.Linear(d_proprio + 2 * cnn.features_dim, 2048, key=keys[0]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(2048, 2048, key=keys[1]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(2048, 512, key=keys[2]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(512, 2 * d_latent, key=keys[3]),
-            ]
+        self.mlp = eqx.nn.MLP(
+            d_proprio + 2 * cnn.features_dim, 2 * d_latent, width_size, depth, key=key
         )
 
     def __call__(
@@ -241,7 +240,7 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
             [proprio_observation, self.cnn(rgb_observation), self.cnn(rgb_goal)]
         )
         mean, stddev = rearrange(
-            self.net(input_features), "(x d_latent) -> x d_latent", x=2
+            self.mlp(input_features), "(x d_latent) -> x d_latent", x=2
         )
         stddev = jax.nn.softplus(stddev)
         return jnp.stack([mean, stddev])
@@ -249,30 +248,25 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
 
 class MLPPolicyNetwork(AbstractPolicyNetwork):
     cnn: CNNEncoder
-    net: eqx.nn.Sequential
+    mlp: eqx.nn.MLP
 
     def __init__(
         self,
         d_proprio: int,
         d_latent_plan: int,
         d_action: int,
+        width_size: int,
+        depth: int,
         cnn: CNNEncoder,
         key: jax.Array,
     ):
         self.cnn = cnn
-        keys = jax.random.split(key, 4)
-        self.net = eqx.nn.Sequential(
-            [
-                eqx.nn.Linear(
-                    d_proprio + 2 * cnn.features_dim + d_latent_plan, 2048, key=keys[0]
-                ),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(2048, 2048, key=keys[1]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(2048, 512, key=keys[2]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(512, d_action, key=keys[3]),
-            ]
+        self.mlp = eqx.nn.MLP(
+            d_proprio + 2 * cnn.features_dim + d_latent_plan,
+            d_action,
+            width_size,
+            depth,
+            key=key,
         )
 
     def __call__(
@@ -293,7 +287,7 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
             ],
             axis=1,
         )
-        return jax.vmap(self.net)(input_features)
+        return jax.vmap(self.mlp)(input_features)
 
 
 class LSTMPolicyNetwork(AbstractPolicyNetwork):

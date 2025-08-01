@@ -35,6 +35,8 @@ model:
     _target_: play_lmp.MLPPlanProposalNetwork
     d_proprio: ${model.d_proprio}
     d_latent: ${model.d_latent}
+    width_size: 512
+    depth: 3
   policy:
     _partial_: true
     _target_: play_lmp.LSTMPolicyNetwork
