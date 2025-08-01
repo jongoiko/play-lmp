@@ -2,6 +2,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from einops import rearrange
+from einops import reduce
 from einops import repeat
 from jaxtyping import Array
 from jaxtyping import Float
@@ -49,18 +50,21 @@ class CNNEncoder(eqx.Module):
         self.features_dim = final_dim
         self.net = eqx.nn.Sequential(
             [
-                eqx.nn.Conv2d(3, 32, 8, 4, key=keys[0]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Conv2d(32, 32, 3, key=keys[1]),
+                eqx.nn.Conv2d(3, 32, 3, key=keys[0]),
                 eqx.nn.Lambda(jax.nn.relu),
                 eqx.nn.MaxPool2d(2, 2),
-                eqx.nn.Conv2d(32, 32, 3, key=keys[1]),
+                eqx.nn.Conv2d(32, 64, 3, key=keys[1]),
                 eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.MaxPool2d(2, 2),
+                eqx.nn.MaxPool2d(4, 4),
+                eqx.nn.Conv2d(64, 128, 3, key=keys[2]),
+                eqx.nn.Lambda(jax.nn.relu),
+                eqx.nn.Lambda(
+                    lambda features: reduce(
+                        features, "channel height width -> channel", "mean"
+                    )
+                ),
                 eqx.nn.Lambda(jnp.ravel),
-                eqx.nn.Linear(1152, 512, key=keys[2]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(512, final_dim, key=keys[3]),
+                eqx.nn.Linear(128, final_dim, key=keys[3]),
             ]
         )
 
