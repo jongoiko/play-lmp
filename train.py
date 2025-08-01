@@ -211,7 +211,8 @@ def get_normalization_stats(
         .batch(1024)
         .prefetch(tf.data.AUTOTUNE)
     )
-    rgb_batch_means, proprio_batch_means, action_batch_means = [], [], []
+    rgb_batch_means, proprio_batch_means = [], []
+    action_batch_max, action_batch_min = [], []
     for batch in tqdm(dataset.as_numpy_iterator(), desc="Calculating mean"):
         assert isinstance(batch, dict)
         rgb = jnp.asarray(batch["observation"]["rgb"]) / 255
@@ -219,35 +220,33 @@ def get_normalization_stats(
         action = jnp.asarray(batch["action"])
         rgb_batch_means.append(rgb.mean(axis=(0, 1, 2)))
         proprio_batch_means.append(proprio.mean(axis=0))
-        action_batch_means.append(action.mean(axis=0))
-    rgb_mean, proprio_mean, action_mean = [
+        action_batch_max.append(action.max(axis=0))
+        action_batch_min.append(action.min(axis=0))
+    rgb_mean, proprio_mean = [
         jnp.mean(jnp.stack(arr), axis=0)
-        for arr in [rgb_batch_means, proprio_batch_means, action_batch_means]
+        for arr in [rgb_batch_means, proprio_batch_means]
     ]
-    del rgb_batch_means, proprio_batch_means, action_batch_means
-    rgb_batch_variances, proprio_batch_variances, action_batch_variances = [], [], []
-    for batch in tqdm(
-        dataset.as_numpy_iterator(), desc="Calculating observation stddev"
-    ):
+    action_max = jnp.max(jnp.stack(action_batch_max), axis=0)
+    action_min = jnp.min(jnp.stack(action_batch_min), axis=0)
+    action_stats = jnp.stack([action_max, action_min])
+    del rgb_batch_means, proprio_batch_means, action_batch_max, action_batch_min
+    rgb_batch_variances, proprio_batch_variances = [], []
+    for batch in tqdm(dataset.as_numpy_iterator(), desc="Calculating stddev"):
         assert isinstance(batch, dict)
         rgb = jnp.asarray(batch["observation"]["rgb"]) / 255
         proprio = jnp.asarray(batch["observation"]["effector_translation"])
-        action = jnp.asarray(batch["action"])
         rgb_batch_variances.append(jnp.square(rgb - rgb_mean).mean(axis=(0, 1, 2)))
         proprio_batch_variances.append(jnp.square(proprio - proprio_mean).mean(axis=0))
-        action_batch_variances.append(jnp.square(action - action_mean).mean(axis=0))
-    rgb_std, proprio_std, action_std = [
+    rgb_std, proprio_std = [
         jnp.sqrt(jnp.mean(jnp.stack(arr), axis=0))
         for arr in [
             rgb_batch_variances,
             proprio_batch_variances,
-            action_batch_variances,
         ]
     ]
-    del rgb_batch_variances, proprio_batch_variances, action_batch_variances
+    del rgb_batch_variances, proprio_batch_variances
     rgb_stats = jnp.stack([rgb_mean, rgb_std])
     proprio_stats = jnp.stack([proprio_mean, proprio_std])
-    action_stats = jnp.stack([action_mean, action_std])
     jnp.savez(stats_path, rgb=rgb_stats, proprio=proprio_stats, action=action_stats)
     return rgb_stats, proprio_stats, action_stats
 
