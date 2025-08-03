@@ -39,8 +39,9 @@ class AbstractPolicyNetwork(eqx.Module):
         rgb_observations: Float[Array, "time height width channel"],
         proprio_observations: Float[Array, "time d_proprio"],
         rgb_goal: Float[Array, "height width channel"],
+        actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
-    ) -> Float[Array, "time d_action"]:
+    ) -> Float[Array, " time"]:
         raise NotImplementedError
 
 

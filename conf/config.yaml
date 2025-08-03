@@ -43,3 +43,13 @@ model:
     d_proprio: ${model.d_proprio}
     d_latent_plan: ${model.d_latent}
     d_action: 2
+    num_dl_mixture_elements: 10
+    action_max_bound:
+      _target_: jax.numpy.asarray
+      _args_:
+        - [0.1, 0.1]
+    action_min_bound:
+      _target_: jax.numpy.asarray
+      _args_:
+        - [-0.1, -0.1]
+    num_action_bins: 64

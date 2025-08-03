@@ -238,7 +238,7 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
         return jnp.stack([mean, stddev])
 
 
-def dlml_likelihood(
+def dlml_log_likelihood(
     means: Float[Array, "d k"],
     log_scales: Float[Array, "d k"],
     logit_probs: Float[Array, "d k"],
@@ -310,6 +310,10 @@ def dlml_sample(
 class MLPPolicyNetwork(AbstractPolicyNetwork):
     cnn: CNNEncoder
     mlp: eqx.nn.MLP
+    num_dl_mixture_elements: int
+    action_max_bound: Float[Array, " d_action"]
+    action_min_bound: Float[Array, " d_action"]
+    num_action_bins: int
 
     def __init__(
         self,
@@ -319,24 +323,33 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
         width_size: int,
         depth: int,
         cnn: CNNEncoder,
+        num_dl_mixture_elements: int,
+        action_max_bound: Float[Array, " d_action"],
+        action_min_bound: Float[Array, " d_action"],
+        num_action_bins: int,
         key: jax.Array,
     ):
         self.cnn = cnn
         self.mlp = eqx.nn.MLP(
             d_proprio + 2 * cnn.features_dim + d_latent_plan,
-            d_action,
+            3 * num_dl_mixture_elements * d_action,
             width_size,
             depth,
             key=key,
         )
+        self.num_dl_mixture_elements = num_dl_mixture_elements
+        self.action_max_bound = action_max_bound
+        self.action_min_bound = action_min_bound
+        self.num_action_bins = num_action_bins
 
     def __call__(
         self,
         rgb_observations: Float[Array, "time height width channel"],
         proprio_observations: Float[Array, "time d_proprio"],
         rgb_goal: Float[Array, "height width channel"],
+        actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
-    ) -> Float[Array, "time d_action"]:
+    ) -> Float[Array, " time"]:
         image_features = jax.vmap(self.cnn)(rgb_observations)
         sequence_length = rgb_observations.shape[0]
         input_features = jnp.concat(
@@ -348,13 +361,35 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
             ],
             axis=1,
         )
-        return jax.vmap(self.mlp)(input_features)
+        means, log_scales, logit_probs = rearrange(
+            jax.vmap(self.mlp)(input_features),
+            "time (n k d) -> n time d k",
+            n=3,
+            k=self.num_dl_mixture_elements,
+            d=actions.shape[1],
+        )
+        log_likelihoods = jax.vmap(
+            dlml_log_likelihood, in_axes=(0, 0, 0, 0, None, None, None)
+        )(
+            means,
+            log_scales,
+            logit_probs,
+            actions,
+            jax.lax.stop_gradient(self.action_max_bound),
+            jax.lax.stop_gradient(self.action_min_bound),
+            self.num_action_bins,
+        )
+        return log_likelihoods
 
 
 class LSTMPolicyNetwork(AbstractPolicyNetwork):
     cnn: CNNEncoder
     cell: eqx.nn.LSTMCell
     mlp: eqx.nn.Sequential
+    num_dl_mixture_elements: int
+    action_max_bound: Float[Array, " d_action"]
+    action_min_bound: Float[Array, " d_action"]
+    num_action_bins: int
 
     def __init__(
         self,
@@ -362,6 +397,10 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
         d_latent_plan: int,
         d_action: int,
         cnn: CNNEncoder,
+        num_dl_mixture_elements: int,
+        action_max_bound: Float[Array, " d_action"],
+        action_min_bound: Float[Array, " d_action"],
+        num_action_bins: int,
         key: jax.Array,
     ):
         self.cnn = cnn
@@ -374,17 +413,27 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
             [
                 eqx.nn.Linear(self.cell.hidden_size, 512, key=mlp_keys[0]),
                 eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(512, d_action, key=mlp_keys[1]),
+                eqx.nn.Linear(
+                    512, 3 * num_dl_mixture_elements * d_action, key=mlp_keys[1]
+                ),
             ]
         )
+        self.num_dl_mixture_elements = num_dl_mixture_elements
+        self.action_max_bound = action_max_bound
+        self.action_min_bound = action_min_bound
+        self.num_action_bins = num_action_bins
 
-    def __call__(
+    def _get_dlml_parameters(
         self,
         rgb_observations: Float[Array, "time height width channel"],
         proprio_observations: Float[Array, "time d_proprio"],
         rgb_goal: Float[Array, "height width channel"],
         plan: Float[Array, " d_latent"],
-    ) -> Float[Array, "time d_action"]:
+    ) -> tuple[
+        Float[Array, "time d_action k"],
+        Float[Array, "time d_action k"],
+        Float[Array, "time d_action k"],
+    ]:
         image_features = jax.vmap(self.cnn)(rgb_observations)
         sequence_length = rgb_observations.shape[0]
         input_features = jnp.concat(
@@ -408,4 +457,34 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
             jnp.zeros(self.cell.hidden_size),
         )
         _, (hidden_states, _) = jax.lax.scan(lstm_scan, init_state, input_features)
-        return jax.vmap(self.mlp)(hidden_states)
+        means, log_scales, logit_probs = rearrange(
+            jax.vmap(self.mlp)(hidden_states),
+            "time (n k d_action) -> n time d_action k",
+            n=3,
+            k=self.num_dl_mixture_elements,
+        )
+        return means, log_scales, logit_probs
+
+    def __call__(
+        self,
+        rgb_observations: Float[Array, "time height width channel"],
+        proprio_observations: Float[Array, "time d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        actions: Float[Array, "time d_action"],
+        plan: Float[Array, " d_latent"],
+    ) -> Float[Array, " time"]:
+        means, log_scales, logit_probs = self._get_dlml_parameters(
+            rgb_observations, proprio_observations, rgb_goal, plan
+        )
+        log_likelihoods = jax.vmap(
+            dlml_log_likelihood, in_axes=(0, 0, 0, 0, None, None, None)
+        )(
+            means,
+            log_scales,
+            logit_probs,
+            actions,
+            jax.lax.stop_gradient(self.action_max_bound),
+            jax.lax.stop_gradient(self.action_min_bound),
+            self.num_action_bins,
+        )
+        return log_likelihoods
