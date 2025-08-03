@@ -89,7 +89,7 @@ def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
             actions,
             jnp.zeros(model.plan_proposal.d_latent),
         )
-        return -jnp.mean(
+        return -jnp.sum(
             action_log_likelihoods,
             where=jnp.arange(rgb_observations.shape[0]) < episode_length,
         )
@@ -100,7 +100,7 @@ def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
         batch.actions,
         batch.episode_lengths,
     )
-    return jnp.mean(batch_losses)
+    return jnp.sum(batch_losses) / jnp.sum(batch.episode_lengths)
 
 
 def kl_div_diagonal_gaussians(
