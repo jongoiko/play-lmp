@@ -33,14 +33,6 @@ def preprocess_proprio(
     return (proprio - mean) / std
 
 
-def preprocess_action(
-    action: Float[Array, " d_action"],
-    mean: Float[Array, " d_action"],
-    std: Float[Array, " d_action"],
-) -> Float[Array, " d_action"]:
-    return (action - mean) / std
-
-
 class CNNEncoder(eqx.Module):
     net: eqx.nn.Sequential
     features_dim: int
@@ -244,6 +236,75 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
         )
         stddev = jax.nn.softplus(stddev)
         return jnp.stack([mean, stddev])
+
+
+def dlml_likelihood(
+    means: Float[Array, "d k"],
+    log_scales: Float[Array, "d k"],
+    logit_probs: Float[Array, "d k"],
+    single_target: Float[Array, " d"],
+    target_max_bound: Float[Array, " d"],
+    target_min_bound: Float[Array, " d"],
+    num_target_bins: int,
+    log_scale_min: float = -7.0,
+) -> Float[Array, ""]:
+    # https://github.com/lukashermann/hulc/blob/main/hulc/models/decoders/logistic_decoder_rnn.py
+    def log_sum_exp(x: Array) -> Array:
+        m = jnp.max(x, axis=-1)
+        m2 = jnp.max(x, axis=-1, keepdims=True)
+        return m + jnp.log(jnp.sum(jnp.exp(x - m2), axis=-1))
+
+    log_scales = jnp.clip(log_scales, min=log_scale_min)
+    targets = repeat(single_target, "d -> d k", k=means.shape[1])
+    centered_targets = targets - means
+    inv_stdv = jnp.exp(-log_scales)
+    targets_range = repeat(
+        (target_max_bound - target_min_bound) / 2.0, "d -> d k", k=means.shape[1]
+    )
+    plus_in = inv_stdv * (centered_targets + targets_range / (num_target_bins - 1))
+    cdf_plus = jax.nn.sigmoid(plus_in)
+    min_in = inv_stdv * (centered_targets - targets_range / (num_target_bins - 1))
+    cdf_min = jax.nn.sigmoid(min_in)
+    log_cdf_plus = plus_in - jax.nn.softplus(plus_in)
+    log_one_minus_cdf_min = -jax.nn.softplus(min_in)
+    mid_in = inv_stdv * centered_targets
+    log_pdf_mid = mid_in - log_scales - 2.0 * jax.nn.softplus(mid_in)
+    cdf_delta = cdf_plus - cdf_min
+    log_probs = jnp.where(
+        targets < repeat(target_min_bound, "d -> d k", k=means.shape[1]) + 1e-3,
+        log_cdf_plus,
+        jnp.where(
+            targets > repeat(target_max_bound, "d -> d k", k=means.shape[1]) - 1e-3,
+            log_one_minus_cdf_min,
+            jnp.where(
+                cdf_delta > 1e-5,
+                jnp.log(jnp.clip(cdf_delta, min=1e-12)),
+                log_pdf_mid - jnp.log((num_target_bins - 1) / 2),
+            ),
+        ),
+    )
+    log_probs = log_probs + jax.nn.log_softmax(logit_probs, axis=-1)
+    return jnp.sum(log_sum_exp(log_probs), axis=-1)
+
+
+def dlml_sample(
+    means: Float[Array, "d k"],
+    log_scales: Float[Array, "d k"],
+    logit_probs: Float[Array, "d k"],
+    key: jax.Array,
+) -> Float[Array, " d"]:
+    # https://github.com/lukashermann/hulc/blob/main/hulc/models/decoders/logistic_decoder_rnn.py
+    r1, r2 = 1e-5, 1.0 - 1e-5
+    key1, key2 = jax.random.split(key)
+    temp = (r1 - r2) * jax.random.uniform(key1, means.shape) + r2
+    temp = logit_probs - jnp.log(-jnp.log(temp))
+    argmax = jnp.argmax(temp, -1)
+    selected_log_scales = log_scales[:, argmax].sum(axis=-1)
+    selected_means = means[:, argmax].sum(axis=-1)
+    scales = jnp.exp(selected_log_scales)
+    u = (r1 - r2) * jax.random.uniform(key2, selected_means.shape) + r2
+    sampled = selected_means + scales * (jnp.log(u) - jnp.log(1.0 - u))
+    return sampled
 
 
 class MLPPolicyNetwork(AbstractPolicyNetwork):

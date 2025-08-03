@@ -19,7 +19,6 @@ from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
 from play_lmp import make_train_step
 from play_lmp import PlayLMP
-from play_lmp import preprocess_action
 from play_lmp import preprocess_image
 from play_lmp import preprocess_proprio
 from tqdm import tqdm
@@ -136,13 +135,6 @@ def tfds_batch_to_episode_batch(
         )
     )(proprio_observations)
     actions = jnp.asarray(batch["action"])
-    actions = jax.jit(
-        jax.vmap(
-            jax.vmap(
-                partial(preprocess_action, mean=action_stats[0], std=action_stats[1])
-            )
-        )
-    )(actions)
     # The "valid" key is introduced by `pad_to_cardinality`
     episode_lengths = jnp.asarray(batch["valid"]).sum(axis=1)
     return EpisodeBatch(
