@@ -17,6 +17,14 @@ training:
 model:
   d_proprio: 2
   d_latent: 256
+  target_action_max:
+    _target_: jax.numpy.asarray
+    _args_:
+      - [1.0, 1.0]
+  target_action_min:
+    _target_: jax.numpy.asarray
+    _args_:
+      - [-1.0, -1.0]
   cnn:
     _partial_: true
     _target_: play_lmp.CNNEncoder
@@ -44,12 +52,6 @@ model:
     d_latent_plan: ${model.d_latent}
     d_action: 2
     num_dl_mixture_elements: 10
-    action_max_bound:
-      _target_: jax.numpy.asarray
-      _args_:
-        - [0.1, 0.1]
-    action_min_bound:
-      _target_: jax.numpy.asarray
-      _args_:
-        - [-0.1, -0.1]
+    action_max_bound: ${model.target_action_max}
+    action_min_bound: ${model.target_action_min}
     num_action_bins: 64

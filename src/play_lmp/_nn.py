@@ -33,6 +33,17 @@ def preprocess_proprio(
     return (proprio - mean) / std
 
 
+def preprocess_action(
+    action: Float[Array, " d_action"],
+    max: Float[Array, " d_action"],
+    min: Float[Array, " d_action"],
+    target_max: Float[Array, " d_action"],
+    target_min: Float[Array, " d_action"],
+) -> Float[Array, " d_action"]:
+    zero_one = (action - min) / (max - min)
+    return zero_one * (target_max - target_min) + target_min
+
+
 class CNNEncoder(eqx.Module):
     net: eqx.nn.Sequential
     features_dim: int

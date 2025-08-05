@@ -19,6 +19,7 @@ from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
 from play_lmp import make_train_step
 from play_lmp import PlayLMP
+from play_lmp import preprocess_action
 from play_lmp import preprocess_image
 from play_lmp import preprocess_proprio
 from tqdm import tqdm
@@ -35,6 +36,12 @@ def main(cfg: DictConfig) -> None:
     optimizer: optax.GradientTransformation = hydra.utils.instantiate(
         cfg.training.optimizer
     )
+    target_action_range = jnp.stack(
+        [
+            hydra.utils.instantiate(cfg.model.target_action_max),
+            hydra.utils.instantiate(cfg.model.target_action_min),
+        ]
+    )
     train(
         cfg.training,
         model,
@@ -43,6 +50,7 @@ def main(cfg: DictConfig) -> None:
         rgb_stats,
         proprio_stats,
         action_stats,
+        target_action_range,
         key=random_key,
     )
 
@@ -69,6 +77,7 @@ def train(
     rgb_normalization_stats: Array,
     proprio_normalization_stats: Array,
     action_stats: Array,
+    target_action_range: Array,
     key: jax.Array,
 ) -> None:
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
@@ -84,6 +93,7 @@ def train(
                 rgb_normalization_stats,
                 proprio_normalization_stats,
                 action_stats,
+                target_action_range,
             )
             model, opt_state, loss = eqx.filter_jit(make_train_step)(
                 model,
@@ -110,6 +120,7 @@ def tfds_batch_to_episode_batch(
     rgb_stats: Float[Array, "2 channel"],
     proprio_stats: Float[Array, "2 d_proprio"],
     action_stats: Float[Array, "2 d_action"],
+    target_action_range: Float[Array, "2 d_action"],
 ) -> EpisodeBatch:
     rgb_observations = jnp.asarray(batch["observation"]["rgb"])
     rgb_observations = jax.jit(
@@ -135,6 +146,19 @@ def tfds_batch_to_episode_batch(
         )
     )(proprio_observations)
     actions = jnp.asarray(batch["action"])
+    actions = jax.jit(
+        jax.vmap(
+            jax.vmap(
+                partial(
+                    preprocess_action,
+                    max=action_stats[0],
+                    min=action_stats[1],
+                    target_max=target_action_range[0],
+                    target_min=target_action_range[1],
+                )
+            )
+        )
+    )(actions)
     # The "valid" key is introduced by `pad_to_cardinality`
     episode_lengths = jnp.asarray(batch["valid"]).sum(axis=1)
     return EpisodeBatch(
