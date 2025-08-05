@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import Int
+from jaxtyping import PyTree
 
 
 class AbstractPlanRecognitionNetwork(eqx.Module):
@@ -42,6 +43,22 @@ class AbstractPolicyNetwork(eqx.Module):
         actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, " time"]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def reset(self) -> PyTree:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def act(
+        self,
+        rgb_observation: Float[Array, "height width channel"],
+        proprio_observation: Float[Array, " d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        plan: Float[Array, " d_latent"],
+        key: jax.Array,
+        state: PyTree,
+    ) -> tuple[Float[Array, " d_action"], PyTree]:
         raise NotImplementedError
 
 

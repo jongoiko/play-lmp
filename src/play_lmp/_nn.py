@@ -7,6 +7,7 @@ from einops import repeat
 from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import Int
+from jaxtyping import PyTree
 from jaxtyping import UInt8
 
 from ._play_lmp import AbstractPlanProposalNetwork
@@ -353,14 +354,17 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
         self.action_min_bound = action_min_bound
         self.num_action_bins = num_action_bins
 
-    def __call__(
+    def _get_dlml_parameters(
         self,
         rgb_observations: Float[Array, "time height width channel"],
         proprio_observations: Float[Array, "time d_proprio"],
         rgb_goal: Float[Array, "height width channel"],
-        actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
-    ) -> Float[Array, " time"]:
+    ) -> tuple[
+        Float[Array, "time d_action k"],
+        Float[Array, "time d_action k"],
+        Float[Array, "time d_action k"],
+    ]:
         image_features = jax.vmap(self.cnn)(rgb_observations)
         sequence_length = rgb_observations.shape[0]
         input_features = jnp.concat(
@@ -377,7 +381,19 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
             "time (n k d) -> n time d k",
             n=3,
             k=self.num_dl_mixture_elements,
-            d=actions.shape[1],
+        )
+        return means, log_scales, logit_probs
+
+    def __call__(
+        self,
+        rgb_observations: Float[Array, "time height width channel"],
+        proprio_observations: Float[Array, "time d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        actions: Float[Array, "time d_action"],
+        plan: Float[Array, " d_latent"],
+    ) -> Float[Array, " time"]:
+        means, log_scales, logit_probs = self._get_dlml_parameters(
+            rgb_observations, proprio_observations, rgb_goal, plan
         )
         log_likelihoods = jax.vmap(
             dlml_log_likelihood, in_axes=(0, 0, 0, 0, None, None, None)
@@ -391,6 +407,27 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
             self.num_action_bins,
         )
         return log_likelihoods
+
+    def reset(self) -> PyTree:
+        return None
+
+    def act(
+        self,
+        rgb_observation: Float[Array, "height width channel"],
+        proprio_observation: Float[Array, " d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        plan: Float[Array, " d_latent"],
+        key: jax.Array,
+        state: PyTree,
+    ) -> tuple[Float[Array, " d_action"], PyTree]:
+        means, log_scales, logit_probs = self._get_dlml_parameters(
+            jnp.expand_dims(rgb_observation, 0),
+            jnp.expand_dims(proprio_observation, 0),
+            rgb_goal,
+            plan,
+        )
+        sample = dlml_sample(means[0], log_scales[0], logit_probs[0], key)
+        return sample, None
 
 
 class LSTMPolicyNetwork(AbstractPolicyNetwork):
@@ -434,6 +471,26 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
         self.action_min_bound = action_min_bound
         self.num_action_bins = num_action_bins
 
+    def _get_lstm_input_features(
+        self,
+        rgb_observations: Float[Array, "time height width channel"],
+        proprio_observations: Float[Array, "time d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        plan: Float[Array, " d_latent"],
+    ) -> Float[Array, "time d"]:
+        image_features = jax.vmap(self.cnn)(rgb_observations)
+        sequence_length = rgb_observations.shape[0]
+        features = jnp.concat(
+            [
+                image_features,
+                proprio_observations,
+                repeat(self.cnn(rgb_goal), "... -> n ...", n=sequence_length),
+                repeat(plan, "... -> n ...", n=sequence_length),
+            ],
+            axis=1,
+        )
+        return features
+
     def _get_dlml_parameters(
         self,
         rgb_observations: Float[Array, "time height width channel"],
@@ -445,24 +502,18 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
         Float[Array, "time d_action k"],
         Float[Array, "time d_action k"],
     ]:
-        image_features = jax.vmap(self.cnn)(rgb_observations)
-        sequence_length = rgb_observations.shape[0]
-        input_features = jnp.concat(
-            [
-                image_features,
-                proprio_observations,
-                repeat(self.cnn(rgb_goal), "... -> n ...", n=sequence_length),
-                repeat(plan, "... -> n ...", n=sequence_length),
-            ],
-            axis=1,
-        )
-
         def lstm_scan(
             state: tuple[Array, Array], input: Array
         ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
             output = self.cell(input, state)
             return output, output
 
+        input_features = self._get_lstm_input_features(
+            rgb_observations,
+            proprio_observations,
+            rgb_goal,
+            plan,
+        )
         init_state = (
             jnp.zeros(self.cell.hidden_size),
             jnp.zeros(self.cell.hidden_size),
@@ -499,3 +550,34 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
             self.num_action_bins,
         )
         return log_likelihoods
+
+    def reset(self) -> PyTree:
+        return (
+            jnp.zeros(self.cell.hidden_size),
+            jnp.zeros(self.cell.hidden_size),
+        )
+
+    def act(
+        self,
+        rgb_observation: Float[Array, "height width channel"],
+        proprio_observation: Float[Array, " d_proprio"],
+        rgb_goal: Float[Array, "height width channel"],
+        plan: Float[Array, " d_latent"],
+        key: jax.Array,
+        state: PyTree,
+    ) -> tuple[Float[Array, " d_action"], PyTree]:
+        input_features = self._get_lstm_input_features(
+            jnp.expand_dims(rgb_observation, 0),
+            jnp.expand_dims(proprio_observation, 0),
+            rgb_goal,
+            plan,
+        )[0]
+        new_state = self.cell(input_features, state)
+        means, log_scales, logit_probs = rearrange(
+            self.mlp(new_state[0]),
+            "(n k d_action) -> n d_action k",
+            n=3,
+            k=self.num_dl_mixture_elements,
+        )
+        sample = dlml_sample(means, log_scales, logit_probs, key)
+        return sample, new_state
