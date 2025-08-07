@@ -17,3 +17,4 @@ with install_import_hook("play_lmp", "beartype.beartype"):
     from ._play_lmp import PlayLMP
     from ._training import EpisodeBatch
     from ._training import make_train_step
+    from ._training import play_gcbc_loss

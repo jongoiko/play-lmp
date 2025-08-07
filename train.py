@@ -18,6 +18,7 @@ from jaxtyping import Float
 from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
 from play_lmp import make_train_step
+from play_lmp import play_gcbc_loss
 from play_lmp import PlayLMP
 from play_lmp import preprocess_action
 from play_lmp import preprocess_image
@@ -28,7 +29,10 @@ from tqdm import tqdm
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     random_key = jax.random.PRNGKey(cfg.random_seed)
-    dataset = get_dataset(cfg, "train")
+    train_dataset, val_dataset = (
+        get_dataset(cfg, "train"),
+        get_dataset(cfg, "val", repeat=False),
+    )
     rgb_stats, proprio_stats, action_stats = get_normalization_stats(cfg)
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, model_key)
@@ -46,7 +50,8 @@ def main(cfg: DictConfig) -> None:
         cfg.training,
         model,
         optimizer,
-        dataset,
+        train_dataset,
+        val_dataset,
         rgb_stats,
         proprio_stats,
         action_stats,
@@ -73,28 +78,32 @@ def train(
     cfg: DictConfig,
     model: PlayLMP,
     optimizer: optax.GradientTransformation,
-    dataset: tf.data.Dataset,
+    train_dataset: tf.data.Dataset,
+    val_dataset: tf.data.Dataset,
     rgb_normalization_stats: Array,
     proprio_normalization_stats: Array,
     action_stats: Array,
     target_action_range: Array,
     key: jax.Array,
 ) -> None:
+    def get_episode_batch(tf_batch: dict) -> EpisodeBatch:
+        return tfds_batch_to_episode_batch(
+            tf_batch,
+            (128, 128),
+            rgb_normalization_stats,
+            proprio_normalization_stats,
+            action_stats,
+            target_action_range,
+        )
+
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
     tb_writer = tf.summary.create_file_writer(
         datetime.datetime.now().strftime(cfg.tensorboard_log_dir)
     )
     with tb_writer.as_default():
-        for step, batch in zip(range(cfg.num_steps), dataset):
+        for step, batch in zip(range(cfg.num_steps), train_dataset):
             key, step_key = jax.random.split(key)
-            episode_batch = tfds_batch_to_episode_batch(
-                batch,
-                (128, 128),
-                rgb_normalization_stats,
-                proprio_normalization_stats,
-                action_stats,
-                target_action_range,
-            )
+            episode_batch = get_episode_batch(batch)
             model, opt_state, loss = eqx.filter_jit(make_train_step)(
                 model,
                 optimizer,
@@ -104,9 +113,24 @@ def train(
                 method=cfg.method,
                 beta=cfg.beta,
             )
-            tf.summary.scalar("loss", float(loss), step=step)
+            tf.summary.scalar("step_loss/train", float(loss), step=step)
             tb_writer.flush()
             print(f"Step {step}: Training loss {loss}")
+            if step % cfg.evaluate_every_n_steps == 0:
+                total_loss, total_steps = 0, 0
+                inference_model = eqx.nn.inference_mode(model)
+                for batch in val_dataset:
+                    assert isinstance(batch, dict)
+                    episode_batch = get_episode_batch(batch)
+                    loss = eqx.filter_jit(play_gcbc_loss)(
+                        inference_model, episode_batch
+                    )
+                    total_loss += loss * episode_batch.episode_lengths.sum()
+                    total_steps += episode_batch.episode_lengths.sum()
+                loss = total_loss / total_steps
+                print(f"Step {step}: Validation loss {loss}")
+                tf.summary.scalar("step_loss/val", float(loss), step=step)
+                tb_writer.flush()
 
 
 def num_model_parameters(model: eqx.Module) -> int:
@@ -170,7 +194,10 @@ def tfds_batch_to_episode_batch(
 
 
 def get_dataset(
-    cfg: DictConfig, split: Literal["train", "val", "test"], batch: bool = True
+    cfg: DictConfig,
+    split: Literal["train", "val", "test"],
+    batch: bool = True,
+    repeat: bool = True,
 ) -> tf.data.Dataset:
     builder = tfds.builder_from_directory(cfg.training.tf_dataset_path)
     all_dataset = cast(tf.data.Dataset, builder.as_dataset(split="train"))
@@ -189,9 +216,12 @@ def get_dataset(
     dataset = splits[split]
     if not batch:
         return dataset
+    if repeat:
+        dataset = dataset.repeat()
     return (
-        dataset.repeat()
-        .shuffle(buffer_size=cfg.training.shuffle_buffer_size, seed=cfg.random_seed)
+        dataset.shuffle(
+            buffer_size=cfg.training.shuffle_buffer_size, seed=cfg.random_seed
+        )
         .flat_map(
             lambda x: x["steps"]
             .take(cfg.training.sequence_padding_length)

@@ -8,6 +8,7 @@ training:
   tensorboard_log_dir: logs/%Y-%m-%d_%H-%M-%S/
   sequence_padding_length: 32
   batch_size: 32
+  evaluate_every_n_steps: 100
   optimizer:
     _target_: optax.adamw
     learning_rate: 5e-4
