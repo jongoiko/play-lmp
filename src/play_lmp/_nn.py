@@ -311,8 +311,10 @@ def dlml_sample(
     temp = (r1 - r2) * jax.random.uniform(key1, means.shape) + r2
     temp = logit_probs - jnp.log(-jnp.log(temp))
     argmax = jnp.argmax(temp, -1)
-    selected_log_scales = log_scales[:, argmax].sum(axis=-1)
-    selected_means = means[:, argmax].sum(axis=-1)
+    one_hot_embedding_eye = jnp.eye(means.shape[-1])
+    dist = one_hot_embedding_eye[argmax]
+    selected_log_scales = (dist * log_scales).sum(axis=-1)
+    selected_means = (dist * means).sum(axis=-1)
     scales = jnp.exp(selected_log_scales)
     u = (r1 - r2) * jax.random.uniform(key2, selected_means.shape) + r2
     sampled = selected_means + scales * (jnp.log(u) - jnp.log(1.0 - u))
