@@ -789,6 +789,18 @@ wheels = [
 ]
 
 [[package]]
+name = "jmp"
+version = "0.0.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/b0/e90fbbffef4b345329c878a69f0336d3edc5a1f9fcba193931aca2132d62/jmp-0.0.4.tar.gz", hash = "sha256:5dfeb0fd7c7a9f72a70fff0aab9d0cbfae32a809c02f4037ff3485ceb33e1730", size = 18582 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/e5/cce82de2831e5aff9332d8d624bb57188f1b2af6ccf6979caf898a8a4348/jmp-0.0.4-py3-none-any.whl", hash = "sha256:6aa7adbddf2bd574b28c7faf6e81a735eb11f53386447896909c6968dc36807d", size = 18274 },
+]
+
+[[package]]
 name = "keras-nightly"
 version = "3.11.0.dev2025080504"
 source = { registry = "https://pypi.org/simple" }
@@ -1594,6 +1606,7 @@ dependencies = [
     { name = "hydra-core" },
     { name = "jax", extra = ["cuda12"] },
     { name = "jaxtyping" },
+    { name = "jmp" },
     { name = "language-table" },
     { name = "optax" },
     { name = "tf-nightly" },
@@ -1612,6 +1625,7 @@ requires-dist = [
     { name = "hydra-core", specifier = ">=1.3.2" },
     { name = "jax", extras = ["cuda12"], specifier = ">=0.7.0" },
     { name = "jaxtyping", specifier = ">=0.3.2" },
+    { name = "jmp", specifier = ">=0.0.4" },
     { name = "language-table", git = "https://github.com/google-research/language-table" },
     { name = "optax", specifier = ">=0.2.5" },
     { name = "tf-nightly", specifier = "<2.21" },

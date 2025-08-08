@@ -10,6 +10,7 @@ import equinox as eqx
 import hydra
 import jax
 import jax.numpy as jnp
+import jmp
 import optax
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -37,6 +38,8 @@ def main(cfg: DictConfig) -> None:
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, model_key)
     print(f"Total trainable parameters: {num_model_parameters(model):_}")
+    mp_policy = jmp.get_policy(cfg.training.mixed_precision_policy)
+    model = mp_policy.cast_to_param(model)
     optimizer: optax.GradientTransformation = hydra.utils.instantiate(
         cfg.training.optimizer
     )
@@ -52,6 +55,7 @@ def main(cfg: DictConfig) -> None:
         optimizer,
         train_dataset,
         val_dataset,
+        mp_policy,
         rgb_stats,
         proprio_stats,
         action_stats,
@@ -80,6 +84,7 @@ def train(
     optimizer: optax.GradientTransformation,
     train_dataset: tf.data.Dataset,
     val_dataset: tf.data.Dataset,
+    mp_policy: jmp.Policy,
     rgb_normalization_stats: Array,
     proprio_normalization_stats: Array,
     action_stats: Array,
@@ -97,6 +102,7 @@ def train(
         )
 
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
+    opt_state = mp_policy.cast_to_param(opt_state)
     tb_writer = tf.summary.create_file_writer(
         datetime.datetime.now().strftime(cfg.tensorboard_log_dir)
     )
@@ -108,6 +114,7 @@ def train(
                 model,
                 optimizer,
                 opt_state,
+                mp_policy,
                 episode_batch,
                 step_key,
                 method=cfg.method,

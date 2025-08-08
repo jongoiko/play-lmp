@@ -4,6 +4,7 @@ from typing import Literal
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import jmp
 import optax
 from jaxtyping import Array
 from jaxtyping import Float
@@ -26,11 +27,13 @@ def make_train_step(
     model: PlayLMP,
     optim: optax.GradientTransformation,
     opt_state: PyTree,
+    mp_policy: jmp.Policy,
     batch: EpisodeBatch,
     key: jax.Array,
     method: Literal["play-lmp", "play-gcbc"],
     beta: float = 0.0,
 ) -> tuple[PlayLMP, PyTree, Float[Array, ""]]:
+    model, batch = mp_policy.cast_to_compute((model, batch))
     if method == "play-gcbc":
         loss_value, grads = eqx.filter_value_and_grad(play_gcbc_loss)(model, batch)
     elif method == "play-lmp":

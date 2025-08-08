@@ -13,6 +13,7 @@ dependencies = [
     "hydra-core>=1.3.2",
     "jax[cuda12]>=0.7.0",
     "jaxtyping>=0.3.2",
+    "jmp>=0.0.4",
     "language-table",
     "optax>=0.2.5",
     "tf-nightly<2.21",

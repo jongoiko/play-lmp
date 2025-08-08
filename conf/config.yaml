@@ -9,6 +9,7 @@ training:
   sequence_padding_length: 32
   batch_size: 32
   evaluate_every_n_steps: 100
+  mixed_precision_policy: p=f32,c=bf16
   optimizer:
     _target_: optax.adamw
     learning_rate: 5e-4
