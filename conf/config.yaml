@@ -6,7 +6,7 @@ training:
   test_split_proportion: 0.05
   normalization_stats_path: normalization_stats.npz
   tensorboard_log_dir: logs/%Y-%m-%d_%H-%M-%S/
-  sequence_padding_length: 32
+  window_length: 256
   batch_size: 32
   evaluate_every_n_steps: 100
   mixed_precision_policy: p=f32,c=bf16
@@ -17,25 +17,24 @@ training:
   method: play-gcbc
   beta: 0.01
 model:
-  d_proprio: 2
-  d_latent: 256
+  d_obs: 59
+  d_goal: 12
+  d_latent: 0
+  d_action: 9
   target_action_max:
-    _target_: jax.numpy.asarray
+    _target_: jax.numpy.ones
     _args_:
-      - [1.0, 1.0]
+      - ${model.d_action}
   target_action_min:
-    _target_: jax.numpy.asarray
+    _target_: jax.numpy.full
     _args_:
-      - [-1.0, -1.0]
-  cnn:
-    _partial_: true
-    _target_: play_lmp.CNNEncoder
-    final_dim: 64
+      - ${model.d_action}
+      - -1.0
   plan_recognizer:
     _partial_: true
     _target_: play_lmp.PlanRecognitionTransformer
     num_layers: 6
-    d_proprio: ${model.d_proprio}
+    d_obs: ${model.d_obs}
     num_heads: 8
     ff_dim: 256
     d_latent: ${model.d_latent}
@@ -43,17 +42,19 @@ model:
   plan_proposal:
     _partial_: true
     _target_: play_lmp.MLPPlanProposalNetwork
-    d_proprio: ${model.d_proprio}
+    d_obs: ${model.d_obs}
+    d_goal: ${model.d_goal}
     d_latent: ${model.d_latent}
     width_size: 512
     depth: 3
   policy:
     _partial_: true
     _target_: play_lmp.LSTMPolicyNetwork
-    d_proprio: ${model.d_proprio}
+    d_obs: ${model.d_obs}
+    d_goal: ${model.d_goal}
     d_latent_plan: ${model.d_latent}
-    d_action: 2
-    num_dl_mixture_elements: 10
+    d_action: ${model.d_action}
+    num_dl_mixture_elements: 6
     action_max_bound: ${model.target_action_max}
     action_min_bound: ${model.target_action_min}
     num_action_bins: 64

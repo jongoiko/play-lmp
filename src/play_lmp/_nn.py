@@ -2,36 +2,31 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from einops import rearrange
-from einops import reduce
 from einops import repeat
 from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import Int
 from jaxtyping import PyTree
-from jaxtyping import UInt8
 
 from ._play_lmp import AbstractPlanProposalNetwork
 from ._play_lmp import AbstractPlanRecognitionNetwork
 from ._play_lmp import AbstractPolicyNetwork
 
 
-def preprocess_image(
-    image: UInt8[Array, "height width channel"],
-    target_size: tuple[int, int, int],
-    channel_mean: Float[Array, " channel"],
-    channel_std: Float[Array, " channel"],
-) -> Float[Array, "target_height target_width channel"]:
-    normalized = ((image / 255) - channel_mean) / channel_std
-    resized = jax.image.resize(normalized, target_size, "linear")
-    return resized
+def preprocess_observation(
+    obs: Float[Array, " d_obs"],
+    mean: Float[Array, " d_obs"],
+    std: Float[Array, " d_obs"],
+) -> Float[Array, " d_obs"]:
+    return (obs - mean) / std
 
 
-def preprocess_proprio(
-    proprio: Float[Array, " d_proprio"],
-    mean: Float[Array, " d_proprio"],
-    std: Float[Array, " d_proprio"],
-) -> Float[Array, " d_proprio"]:
-    return (proprio - mean) / std
+def preprocess_goal(
+    goal: Float[Array, " d_goal"],
+    mean: Float[Array, " d_goal"],
+    std: Float[Array, " d_goal"],
+) -> Float[Array, " d_goal"]:
+    return (goal - mean) / std
 
 
 def preprocess_action(
@@ -43,41 +38,6 @@ def preprocess_action(
 ) -> Float[Array, " d_action"]:
     zero_one = (action - min) / (max - min)
     return zero_one * (target_max - target_min) + target_min
-
-
-class CNNEncoder(eqx.Module):
-    net: eqx.nn.Sequential
-    features_dim: int
-
-    def __init__(self, final_dim: int, key: jax.Array):
-        keys = jax.random.split(key, 4)
-        self.features_dim = final_dim
-        self.net = eqx.nn.Sequential(
-            [
-                eqx.nn.Conv2d(3, 32, 3, key=keys[0]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.MaxPool2d(2, 2),
-                eqx.nn.Conv2d(32, 64, 3, key=keys[1]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.MaxPool2d(4, 4),
-                eqx.nn.Conv2d(64, 128, 3, key=keys[2]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Lambda(
-                    lambda features: reduce(
-                        features, "channel height width -> channel", "mean"
-                    )
-                ),
-                eqx.nn.Lambda(jnp.ravel),
-                eqx.nn.Linear(128, final_dim, key=keys[3]),
-            ]
-        )
-
-    def __call__(
-        self, image: Float[Array, "128 128 3"]
-    ) -> Float[Array, " features_dim"]:
-        return self.net(
-            rearrange(image, "height width channel -> channel height width")
-        )
 
 
 class FeedForwardNetwork(eqx.Module):
@@ -169,40 +129,33 @@ class TransformerBlock(eqx.Module):
 
 class PlanRecognitionTransformer(AbstractPlanRecognitionNetwork):
     transformer_blocks: list[TransformerBlock]
-    cnn: CNNEncoder
     z_linear: eqx.nn.Linear
 
     def __init__(
         self,
         num_layers: int,
-        d_proprio: int,
+        d_obs: int,
         num_heads: int,
         ff_dim: int,
         d_latent: int,
         rope_theta: float,
-        cnn: CNNEncoder,
         key: jax.Array,
     ):
-        d_model = cnn.features_dim + d_proprio
+        d_model = 64  # TODO: Change this when implementing Play-LMP
         rope = eqx.nn.RotaryPositionalEmbedding(d_model // num_heads, rope_theta)
         blocks_key, linear_key = jax.random.split(key)
         self.transformer_blocks = [
             TransformerBlock(d_model, num_heads, ff_dim, rope, key=block_key)
             for block_key in jax.random.split(blocks_key, num_layers)
         ]
-        self.cnn = cnn
         self.z_linear = eqx.nn.Linear(d_model, 2 * d_latent, key=linear_key)
 
     def __call__(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
+        observations: Float[Array, "time d_obs"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 d_latent"]:
-        image_features = jax.vmap(self.cnn)(rgb_observations)
-        # Proprioceptive features are concatenated to image features at each
-        # time step
-        tokens = jnp.concat([image_features, proprio_observations], axis=1)
+        tokens = observations
         for block in self.transformer_blocks:
             tokens = block(tokens, sequence_length)
         mask = jnp.arange(tokens.shape[0]).reshape(-1, 1) < sequence_length
@@ -215,36 +168,28 @@ class PlanRecognitionTransformer(AbstractPlanRecognitionNetwork):
 
 
 class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
-    cnn: CNNEncoder
     mlp: eqx.nn.MLP
     d_latent: int
 
     def __init__(
         self,
-        d_proprio: int,
+        d_obs: int,
+        d_goal: int,
         d_latent: int,
         width_size: int,
         depth: int,
-        cnn: CNNEncoder,
         key: jax.Array,
     ):
-        self.cnn = cnn
         self.d_latent = d_latent
-        self.mlp = eqx.nn.MLP(
-            d_proprio + 2 * cnn.features_dim, 2 * d_latent, width_size, depth, key=key
-        )
+        self.mlp = eqx.nn.MLP(d_obs + d_goal, 2 * d_latent, width_size, depth, key=key)
 
     def __call__(
         self,
-        rgb_observation: Float[Array, "height width channel"],
-        proprio_observation: Float[Array, " d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observation: Float[Array, " d_obs"],
+        goal: Float[Array, " d_obs"],
     ) -> Float[Array, "2 d_latent"]:
-        input_features = jnp.concat(
-            [proprio_observation, self.cnn(rgb_observation), self.cnn(rgb_goal)]
-        )
         mean, stddev = rearrange(
-            self.mlp(input_features), "(x d_latent) -> x d_latent", x=2
+            self.mlp(jnp.concat([observation, goal])), "(x d_latent) -> x d_latent", x=2
         )
         stddev = jax.nn.softplus(stddev)
         return jnp.stack([mean, stddev])
@@ -322,7 +267,6 @@ def dlml_sample(
 
 
 class MLPPolicyNetwork(AbstractPolicyNetwork):
-    cnn: CNNEncoder
     mlp: eqx.nn.MLP
     num_dl_mixture_elements: int
     action_max_bound: Float[Array, " d_action"]
@@ -331,21 +275,20 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
 
     def __init__(
         self,
-        d_proprio: int,
+        d_obs: int,
+        d_goal: int,
         d_latent_plan: int,
         d_action: int,
         width_size: int,
         depth: int,
-        cnn: CNNEncoder,
         num_dl_mixture_elements: int,
         action_max_bound: Float[Array, " d_action"],
         action_min_bound: Float[Array, " d_action"],
         num_action_bins: int,
         key: jax.Array,
     ):
-        self.cnn = cnn
         self.mlp = eqx.nn.MLP(
-            d_proprio + 2 * cnn.features_dim + d_latent_plan,
+            d_obs + d_goal + d_latent_plan,
             3 * num_dl_mixture_elements * d_action,
             width_size,
             depth,
@@ -358,22 +301,19 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
 
     def _get_dlml_parameters(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
         plan: Float[Array, " d_latent"],
     ) -> tuple[
         Float[Array, "time d_action k"],
         Float[Array, "time d_action k"],
         Float[Array, "time d_action k"],
     ]:
-        image_features = jax.vmap(self.cnn)(rgb_observations)
-        sequence_length = rgb_observations.shape[0]
+        sequence_length = observations.shape[0]
         input_features = jnp.concat(
             [
-                image_features,
-                proprio_observations,
-                repeat(self.cnn(rgb_goal), "... -> n ...", n=sequence_length),
+                observations,
+                repeat(goal, "... -> n ...", n=sequence_length),
                 repeat(plan, "... -> n ...", n=sequence_length),
             ],
             axis=1,
@@ -388,14 +328,13 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
 
     def __call__(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
         actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, " time"]:
         means, log_scales, logit_probs = self._get_dlml_parameters(
-            rgb_observations, proprio_observations, rgb_goal, plan
+            observations, goal, plan
         )
         log_likelihoods = jax.vmap(
             dlml_log_likelihood, in_axes=(0, 0, 0, 0, None, None, None)
@@ -415,17 +354,15 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
 
     def act(
         self,
-        rgb_observation: Float[Array, "height width channel"],
-        proprio_observation: Float[Array, " d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observation: Float[Array, " d_obs"],
+        goal: Float[Array, " d_goal"],
         plan: Float[Array, " d_latent"],
         key: jax.Array,
         state: PyTree,
     ) -> tuple[Float[Array, " d_action"], PyTree]:
         means, log_scales, logit_probs = self._get_dlml_parameters(
-            jnp.expand_dims(rgb_observation, 0),
-            jnp.expand_dims(proprio_observation, 0),
-            rgb_goal,
+            jnp.expand_dims(observation, 0),
+            goal,
             plan,
         )
         sample = dlml_sample(means[0], log_scales[0], logit_probs[0], key)
@@ -433,7 +370,6 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
 
 
 class LSTMPolicyNetwork(AbstractPolicyNetwork):
-    cnn: CNNEncoder
     cell: eqx.nn.LSTMCell
     mlp: eqx.nn.Sequential
     num_dl_mixture_elements: int
@@ -443,21 +379,18 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
 
     def __init__(
         self,
-        d_proprio: int,
+        d_obs: int,
+        d_goal: int,
         d_latent_plan: int,
         d_action: int,
-        cnn: CNNEncoder,
         num_dl_mixture_elements: int,
         action_max_bound: Float[Array, " d_action"],
         action_min_bound: Float[Array, " d_action"],
         num_action_bins: int,
         key: jax.Array,
     ):
-        self.cnn = cnn
         lstm_key, mlp_key = jax.random.split(key)
-        self.cell = eqx.nn.LSTMCell(
-            d_proprio + 2 * cnn.features_dim + d_latent_plan, 2048, key=lstm_key
-        )
+        self.cell = eqx.nn.LSTMCell(d_obs + d_goal + d_latent_plan, 2048, key=lstm_key)
         mlp_keys = jax.random.split(mlp_key, 2)
         self.mlp = eqx.nn.Sequential(
             [
@@ -475,18 +408,15 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
 
     def _get_lstm_input_features(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, "time d"]:
-        image_features = jax.vmap(self.cnn)(rgb_observations)
-        sequence_length = rgb_observations.shape[0]
+        sequence_length = observations.shape[0]
         features = jnp.concat(
             [
-                image_features,
-                proprio_observations,
-                repeat(self.cnn(rgb_goal), "... -> n ...", n=sequence_length),
+                observations,
+                repeat(goal, "... -> n ...", n=sequence_length),
                 repeat(plan, "... -> n ...", n=sequence_length),
             ],
             axis=1,
@@ -495,9 +425,8 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
 
     def _get_dlml_parameters(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
         plan: Float[Array, " d_latent"],
     ) -> tuple[
         Float[Array, "time d_action k"],
@@ -511,9 +440,8 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
             return output, output
 
         input_features = self._get_lstm_input_features(
-            rgb_observations,
-            proprio_observations,
-            rgb_goal,
+            observations,
+            goal,
             plan,
         )
         init_state = (
@@ -531,14 +459,13 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
 
     def __call__(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
         actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, " time"]:
         means, log_scales, logit_probs = self._get_dlml_parameters(
-            rgb_observations, proprio_observations, rgb_goal, plan
+            observations, goal, plan
         )
         log_likelihoods = jax.vmap(
             dlml_log_likelihood, in_axes=(0, 0, 0, 0, None, None, None)
@@ -561,17 +488,15 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
 
     def act(
         self,
-        rgb_observation: Float[Array, "height width channel"],
-        proprio_observation: Float[Array, " d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observation: Float[Array, " d_obs"],
+        goal: Float[Array, " d_goal"],
         plan: Float[Array, " d_latent"],
         key: jax.Array,
         state: PyTree,
     ) -> tuple[Float[Array, " d_action"], PyTree]:
         input_features = self._get_lstm_input_features(
-            jnp.expand_dims(rgb_observation, 0),
-            jnp.expand_dims(proprio_observation, 0),
-            rgb_goal,
+            jnp.expand_dims(observation, 0),
+            goal,
             plan,
         )[0]
         new_state = self.cell(input_features, state)

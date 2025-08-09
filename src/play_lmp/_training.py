@@ -17,8 +17,8 @@ from ._play_lmp import PlayLMP
 @jax.tree_util.register_dataclass
 @dataclasses.dataclass
 class EpisodeBatch:
-    rgb_observations: Float[Array, "batch time height width channel"]
-    proprio_observations: Float[Array, "batch time d_proprio"]
+    observations: Float[Array, "batch time d_obs"]
+    achieved_goals: Float[Array, "batch time d_goal"]
     actions: Float[Array, "batch time d_action"]
     episode_lengths: Int[Array, " batch"]
 
@@ -79,27 +79,26 @@ def play_lmp_loss(
 
 def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
     def instance_loss(
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
+        observations: Float[Array, "time d_obs"],
+        achieved_goals: Float[Array, "time d_goal"],
         actions: Float[Array, "time d_action"],
         episode_length: Int[Array, ""],
     ) -> Float[Array, ""]:
-        rgb_goal = rgb_observations[episode_length - 1]
+        goal = achieved_goals[episode_length - 1]
         action_log_likelihoods = model.policy(
-            rgb_observations,
-            proprio_observations,
-            rgb_goal,
+            observations,
+            goal,
             actions,
             jnp.zeros(model.plan_proposal.d_latent),
         )
         return -jnp.sum(
             action_log_likelihoods,
-            where=jnp.arange(rgb_observations.shape[0]) < episode_length,
+            where=jnp.arange(observations.shape[0]) < episode_length,
         )
 
     batch_losses = jax.vmap(instance_loss)(
-        batch.rgb_observations,
-        batch.proprio_observations,
+        batch.observations,
+        batch.achieved_goals,
         batch.actions,
         batch.episode_lengths,
     )

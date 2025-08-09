@@ -13,8 +13,7 @@ class AbstractPlanRecognitionNetwork(eqx.Module):
     @abc.abstractmethod
     def __call__(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
+        observations: Float[Array, "time d_obs"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 d_latent"]:
         raise NotImplementedError
@@ -26,9 +25,8 @@ class AbstractPlanProposalNetwork(eqx.Module):
     @abc.abstractmethod
     def __call__(
         self,
-        rgb_observation: Float[Array, "height width channel"],
-        proprio_observation: Float[Array, " d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observation: Float[Array, " d_obs"],
+        goal: Float[Array, " d_goal"],
     ) -> Float[Array, "2 d_latent"]:
         raise NotImplementedError
 
@@ -37,9 +35,8 @@ class AbstractPolicyNetwork(eqx.Module):
     @abc.abstractmethod
     def __call__(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
         actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, " time"]:
@@ -52,9 +49,8 @@ class AbstractPolicyNetwork(eqx.Module):
     @abc.abstractmethod
     def act(
         self,
-        rgb_observation: Float[Array, "height width channel"],
-        proprio_observation: Float[Array, " d_proprio"],
-        rgb_goal: Float[Array, "height width channel"],
+        observation: Float[Array, " d_obs"],
+        goal: Float[Array, " d_goal"],
         plan: Float[Array, " d_latent"],
         key: jax.Array,
         state: PyTree,
@@ -79,17 +75,12 @@ class PlayLMP(eqx.Module):
 
     def __call__(
         self,
-        rgb_observations: Float[Array, "time height width channel"],
-        proprio_observations: Float[Array, "time d_proprio"],
+        observations: Float[Array, "time d_obs"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 2 d_latent"]:
-        sequence_plan = self.plan_recognizer(
-            rgb_observations, proprio_observations, sequence_length
-        )
+        sequence_plan = self.plan_recognizer(observations, sequence_length)
         state_goal_plan = self.plan_proposal(
-            rgb_observations[0],
-            proprio_observations[0],
-            rgb_observations[sequence_length - 1],
+            observations[0], observations[sequence_length - 1]
         )
         return jnp.stack([sequence_plan, state_goal_plan])
 
