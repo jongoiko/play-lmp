@@ -41,16 +41,15 @@ def main(cfg: DictConfig) -> None:
             hydra.utils.instantiate(cfg.model.target_action_min),
         ]
     )
+    preprocessed_dataset = preprocess_dataset(
+        dataset, observation_stats, goal_stats, action_stats, target_action_range
+    )
     train(
         cfg.training,
         model,
         optimizer,
-        dataset,
+        preprocessed_dataset,
         mp_policy,
-        observation_stats,
-        goal_stats,
-        action_stats,
-        target_action_range,
         key=random_key,
     )
 
@@ -68,12 +67,8 @@ def train(
     cfg: DictConfig,
     model: PlayLMP,
     optimizer: optax.GradientTransformation,
-    dataset: minari.MinariDataset,
+    dataset: EpisodeBatch,
     mp_policy: jmp.Policy,
-    observation_stats: Array,
-    goal_stats: Array,
-    action_stats: Array,
-    target_action_range: Array,
     key: jax.Array,
 ) -> None:
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
@@ -88,10 +83,6 @@ def train(
                 cfg.batch_size,
                 cfg.window_length,
                 dataset,
-                observation_stats,
-                goal_stats,
-                action_stats,
-                target_action_range,
                 step_key,
             )
             key, step_key = jax.random.split(key)
@@ -118,42 +109,72 @@ def num_model_parameters(model: eqx.Module) -> int:
 def get_batch(
     batch_size: int,
     window_length: int,
-    dataset: minari.MinariDataset,
-    observation_stats: Float[Array, "2 d_obs"],
-    goal_stats: Float[Array, "2 d_goal"],
-    action_stats: Float[Array, "2 d_action"],
-    target_action_range: Float[Array, "2 d_action"],
+    dataset: EpisodeBatch,
     key: jax.Array,
 ) -> EpisodeBatch:
-    episodes = dataset.sample_episodes(batch_size)
-    episode_lengths = jnp.asarray(
-        [episode.truncations.size for episode in episodes], dtype=jnp.int32
+    key, sampling_key = jax.random.split(key)
+    episode_indices = jax.random.randint(
+        sampling_key, (batch_size,), 0, dataset.achieved_goals.shape[0]
     )
-    start_indices = jax.random.randint(
-        key,
-        (episode_lengths.size,),
-        jnp.zeros(episode_lengths.size, dtype=jnp.int32),
-        episode_lengths - window_length,
+    observations = dataset.observations[episode_indices]
+    achieved_goals = dataset.achieved_goals[episode_indices]
+    actions = dataset.actions[episode_indices]
+    episode_lengths = dataset.episode_lengths[episode_indices]
+    key, sampling_key = jax.random.split(key)
+    start_indices = jax.random.randint(sampling_key, (batch_size,), 0, episode_lengths)
+    episode_lengths = episode_lengths - start_indices
+
+    @jax.jit
+    def take_slice(arr: Array) -> Array:
+        indices = start_indices.reshape(-1, 1) + jnp.arange(window_length)
+        return arr[jnp.arange(arr.shape[0]).reshape(-1, 1), indices]
+
+    return EpisodeBatch(
+        take_slice(observations),
+        take_slice(achieved_goals),
+        take_slice(actions),
+        episode_lengths,
     )
-    episode_data = [
-        [
-            array[start_idx : start_idx + window_length]
-            for array in [
+
+
+def pack_goals(goals: dict) -> Array:
+    keys = ["bottom burner", "kettle", "light switch", "microwave"]
+    return jnp.concat([goals[key] for key in keys], axis=1)
+
+
+def preprocess_dataset(
+    dataset: minari.MinariDataset,
+    observation_stats: Array,
+    goal_stats: Array,
+    action_stats: Array,
+    target_action_range: Array,
+) -> EpisodeBatch:
+    padding_length = 1024
+    observations, achieved_goals, actions, episode_lengths = [], [], [], []
+    for episode in tqdm(dataset, desc="Preprocessing dataset episodes"):
+        length = episode.truncations.size
+        episode_lengths.append(length)
+        observations.append(
+            jnp.pad(
                 episode.observations["observation"][:-1],
+                ((0, padding_length - length), (0, 0)),
+            )
+        )
+        achieved_goals.append(
+            jnp.pad(
+                pack_goals(episode.observations["achieved_goal"])[:-1],
+                ((0, padding_length - length), (0, 0)),
+            )
+        )
+        actions.append(
+            jnp.pad(
                 episode.actions,
-                jnp.concat(episode.observations["achieved_goal"].values(), axis=1)[:-1],
-            ]
-        ]
-        for start_idx, episode in zip(start_indices, episodes)
-    ]
-    episode_lengths = [data[0].shape[0] for data in episode_data]
-    episode_data = [
-        [jnp.pad(array, ((0, window_length - length), (0, 0))) for array in data]
-        for data, length in zip(episode_data, episode_lengths)
-    ]
-    observations, actions, achieved_goals = [
-        jnp.stack([data[i] for data in episode_data]) for i in range(3)
-    ]
+                ((0, padding_length - length), (0, 0)),
+            )
+        )
+    observations = jnp.stack(observations)
+    achieved_goals = jnp.stack(achieved_goals)
+    actions = jnp.stack(actions)
     observations = jax.jit(
         jax.vmap(
             jax.vmap(preprocess_observation, in_axes=(0, None, None)),
