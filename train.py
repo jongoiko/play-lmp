@@ -122,7 +122,7 @@ def get_batch(
     episode_lengths = dataset.episode_lengths[episode_indices]
     key, sampling_key = jax.random.split(key)
     start_indices = jax.random.randint(sampling_key, (batch_size,), 0, episode_lengths)
-    episode_lengths = episode_lengths - start_indices
+    episode_lengths = jnp.minimum(episode_lengths - start_indices, window_length)
 
     @jax.jit
     def take_slice(arr: Array) -> Array:
