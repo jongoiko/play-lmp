@@ -27,7 +27,7 @@ from tqdm import tqdm
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     random_key = jax.random.PRNGKey(cfg.random_seed)
-    dataset, env = get_dataset_and_env(cfg, eval_env=True)
+    dataset, _ = get_dataset_and_env(cfg, eval_env=True)
     observation_stats, goal_stats, action_stats = get_normalization_stats(cfg)
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, cfg.training.method, model_key)
@@ -315,26 +315,6 @@ def evaluate_policy(
     target_action_max = hydra.utils.instantiate(cfg.model.target_action_max)
     target_action_min = hydra.utils.instantiate(cfg.model.target_action_min)
 
-    @eqx.filter_jit
-    def act(
-        obs: Array, goal: Array, plan: Array, key: Array, state: PyTree
-    ) -> tuple[Array, PyTree]:
-        action, new_state = model.policy.act(
-            preprocess_observation(obs, observation_stats[0], observation_stats[1]),
-            preprocess_goal(goal, goal_stats[0], goal_stats[1]),
-            plan,
-            key,
-            state,
-        )
-        action = postprocess_action(
-            action,
-            action_stats[0],
-            action_stats[1],
-            target_action_max,
-            target_action_min,
-        )
-        return action, new_state
-
     jit_preprocess_obs = jax.jit(
         lambda obs: preprocess_observation(
             obs, observation_stats[0], observation_stats[1]
@@ -370,7 +350,19 @@ def evaluate_policy(
                     plan = model.sample_plan(sampling_params, sampling_key)
                 state = model.policy.reset()
             key, sampling_key = jax.random.split(key)
-            action, state = act(obs["observation"], goal, plan, sampling_key, state)
+            action, state = _policy_act(
+                model,
+                obs["observation"],
+                goal,
+                plan,
+                sampling_key,
+                state,
+                observation_stats,
+                goal_stats,
+                action_stats,
+                target_action_max,
+                target_action_min,
+            )
             obs, _, step_terminated, truncated, info, *_ = env.step(action)
             terminated = step_terminated or truncated
             step += 1
@@ -378,6 +370,37 @@ def evaluate_policy(
         if not info["tasks_to_complete"]:
             num_successes += 1
     return 100 * num_successes / num_episodes, 100 * num_completions / num_tasks
+
+
+@eqx.filter_jit
+def _policy_act(
+    model: PlayLMP,
+    obs: Array,
+    goal: Array,
+    plan: Array,
+    key: Array,
+    state: PyTree,
+    observation_stats: Array,
+    goal_stats: Array,
+    action_stats: Array,
+    target_action_max: Array,
+    target_action_min: Array,
+) -> tuple[Array, PyTree]:
+    action, new_state = model.policy.act(
+        preprocess_observation(obs, observation_stats[0], observation_stats[1]),
+        preprocess_goal(goal, goal_stats[0], goal_stats[1]),
+        plan,
+        key,
+        state,
+    )
+    action = postprocess_action(
+        action,
+        action_stats[0],
+        action_stats[1],
+        target_action_max,
+        target_action_min,
+    )
+    return action, new_state
 
 
 if __name__ == "__main__":
