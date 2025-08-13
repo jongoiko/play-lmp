@@ -85,9 +85,7 @@ class PlayLMP(eqx.Module):
         sequence_plan = self.plan_recognizer(
             observations, goal, actions, sequence_length
         )
-        state_goal_plan = self.plan_proposal(
-            observations[0], observations[sequence_length - 1]
-        )
+        state_goal_plan = self.plan_proposal(observations[0], goal)
         return jnp.stack([sequence_plan, state_goal_plan])
 
     def sample_plan(

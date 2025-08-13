@@ -48,33 +48,34 @@ def make_train_step(
 def play_lmp_loss(
     model: PlayLMP, batch: EpisodeBatch, key: jax.Array, beta: float = 0.5
 ) -> Float[Array, ""]:
-    raise NotImplementedError
-    # plans = jax.vmap(model)(
-    #     batch.rgb_observations, batch.proprio_observations, batch.episode_lengths
-    # )
-    # sequence_plans, state_goal_plans = rearrange(
-    #     plans, "batch a b d_latent -> a batch b d_latent"
-    # )
-    # num_sequences = batch.rgb_observations.shape[0]
-    # sampling_keys = jax.random.split(key, num_sequences)
-    # sampled_plans = jax.vmap(model.sample_plan)(sequence_plans, sampling_keys)
-    # goals = batch.rgb_observations[
-    #     jnp.arange(num_sequences),
-    #     batch.episode_lengths - 1,
-    #     ...,
-    # ]
-    # predicted_actions = jax.vmap(model.policy)(
-    #     batch.rgb_observations,
-    #     batch.proprio_observations,
-    #     goals,
-    #     sampled_plans,
-    # )
-    # reconstruction_loss = jax.vmap(sequence_mse_loss)(
-    #     batch.actions, predicted_actions, batch.episode_lengths
-    # )
-    # plan_kl_loss = jax.vmap(kl_div_diagonal_gaussians)(state_goal_plans, sequence_plans)
-    # loss = reconstruction_loss + beta * plan_kl_loss
-    # return jnp.mean(loss)
+    def instance_loss(
+        observations: Float[Array, "time d_obs"],
+        achieved_goals: Float[Array, "time d_goal"],
+        actions: Float[Array, "time d_action"],
+        episode_length: Int[Array, ""],
+        key: jax.Array,
+    ) -> Float[Array, ""]:
+        goal = achieved_goals[episode_length - 1]
+        posterior_plan_params, prior_plan_params = model(
+            observations, goal, actions, episode_length
+        )
+        sampled_plan = model.sample_plan(posterior_plan_params, key)
+        action_log_likelihoods = model.policy(observations, goal, actions, sampled_plan)
+        action_reconstruction_loss = -jnp.mean(
+            action_log_likelihoods,
+            where=jnp.arange(observations.shape[0]) < episode_length,
+        )
+        kl_loss = kl_div_diagonal_gaussians(posterior_plan_params, prior_plan_params)
+        return action_reconstruction_loss + beta * kl_loss
+
+    batch_losses = jax.vmap(instance_loss)(
+        batch.observations,
+        batch.achieved_goals,
+        batch.actions,
+        batch.episode_lengths,
+        jax.random.split(key, batch.observations.shape[0]),
+    )
+    return jnp.mean(batch_losses)
 
 
 def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:

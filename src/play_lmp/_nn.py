@@ -146,7 +146,7 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
     def __call__(
         self,
         observation: Float[Array, " d_obs"],
-        goal: Float[Array, " d_obs"],
+        goal: Float[Array, " d_goal"],
     ) -> Float[Array, "2 d_latent"]:
         mean, stddev = rearrange(
             self.mlp(jnp.concat([observation, goal])), "(x d_latent) -> x d_latent", x=2
