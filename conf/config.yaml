@@ -9,8 +9,8 @@ training:
   mixed_precision_policy: p=f32,c=bf16
   optimizer:
     _target_: optax.adamw
-    learning_rate: 5e-4
-  num_steps: 1000
+    learning_rate: 1e-3
+  num_steps: 100000
   method: play-gcbc
   beta: 0.01
   evaluate:
@@ -58,4 +58,4 @@ model:
     num_dl_mixture_elements: 6
     action_max_bound: ${model.target_action_max}
     action_min_bound: ${model.target_action_min}
-    num_action_bins: 64
+    num_action_bins: 256
