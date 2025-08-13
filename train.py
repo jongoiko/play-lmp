@@ -80,8 +80,7 @@ def train(
         for step in range(cfg.num_steps):
             key, step_key = jax.random.split(key)
             batch = get_batch(
-                cfg.batch_size,
-                cfg.window_length,
+                cfg,
                 dataset,
                 step_key,
             )
@@ -107,26 +106,38 @@ def num_model_parameters(model: eqx.Module) -> int:
 
 
 def get_batch(
-    batch_size: int,
-    window_length: int,
+    cfg: DictConfig,
     dataset: EpisodeBatch,
     key: jax.Array,
 ) -> EpisodeBatch:
     key, sampling_key = jax.random.split(key)
     episode_indices = jax.random.randint(
-        sampling_key, (batch_size,), 0, dataset.achieved_goals.shape[0]
+        sampling_key, (cfg.batch_size,), 0, dataset.achieved_goals.shape[0]
     )
     observations = dataset.observations[episode_indices]
     achieved_goals = dataset.achieved_goals[episode_indices]
     actions = dataset.actions[episode_indices]
     episode_lengths = dataset.episode_lengths[episode_indices]
     key, sampling_key = jax.random.split(key)
-    start_indices = jax.random.randint(sampling_key, (batch_size,), 0, episode_lengths)
-    episode_lengths = jnp.minimum(episode_lengths - start_indices, window_length)
+    min_episode_length, max_episode_length = (
+        (cfg.gcbc_window_length_min, cfg.gcbc_window_length_max)
+        if cfg.method == "play-gcbc"
+        else 2 * (cfg.lmp_window_length,)
+    )
+    start_indices = jax.random.randint(
+        sampling_key, (cfg.batch_size,), 0, episode_lengths - max_episode_length
+    )
+    key, sampling_key = jax.random.split(key)
+    episode_lengths = jnp.minimum(
+        episode_lengths - start_indices,
+        jax.random.randint(
+            sampling_key, (cfg.batch_size,), min_episode_length, max_episode_length + 1
+        ),
+    )
 
     @jax.jit
     def take_slice(arr: Array) -> Array:
-        indices = start_indices.reshape(-1, 1) + jnp.arange(window_length)
+        indices = start_indices.reshape(-1, 1) + jnp.arange(max_episode_length)
         return arr[jnp.arange(arr.shape[0]).reshape(-1, 1), indices]
 
     return EpisodeBatch(
