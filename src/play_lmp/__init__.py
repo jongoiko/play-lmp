@@ -9,7 +9,7 @@ with install_import_hook("play_lmp", "beartype.beartype"):
     from ._nn import MLPPlanProposalNetwork
     from ._nn import MLPPolicyNetwork
     from ._nn import LSTMPolicyNetwork
-    from ._nn import PlanRecognitionTransformer
+    from ._nn import BidirectionalLSTMPlanRecognitionNetwork
     from ._nn import preprocess_action
     from ._nn import preprocess_goal
     from ._nn import preprocess_observation

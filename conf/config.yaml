@@ -33,13 +33,12 @@ model:
       - -1.0
   plan_recognizer:
     _partial_: true
-    _target_: play_lmp.PlanRecognitionTransformer
-    num_layers: 6
+    _target_: play_lmp.BidirectionalLSTMPlanRecognitionNetwork
     d_obs: ${model.d_obs}
-    num_heads: 8
-    ff_dim: 256
+    d_goal: ${model.d_goal}
+    d_action: ${model.d_action}
     d_latent: ${model.d_latent}
-    rope_theta: 10000.0
+    hidden_size: 1024
   plan_proposal:
     _partial_: true
     _target_: play_lmp.MLPPlanProposalNetwork

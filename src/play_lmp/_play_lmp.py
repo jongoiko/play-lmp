@@ -14,6 +14,8 @@ class AbstractPlanRecognitionNetwork(eqx.Module):
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
+        actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 d_latent"]:
         raise NotImplementedError
@@ -76,9 +78,13 @@ class PlayLMP(eqx.Module):
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
+        actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 2 d_latent"]:
-        sequence_plan = self.plan_recognizer(observations, sequence_length)
+        sequence_plan = self.plan_recognizer(
+            observations, goal, actions, sequence_length
+        )
         state_goal_plan = self.plan_proposal(
             observations[0], observations[sequence_length - 1]
         )

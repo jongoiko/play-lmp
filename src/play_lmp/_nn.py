@@ -51,128 +51,77 @@ def postprocess_action(
     return zero_one * (max - min) + min
 
 
-class FeedForwardNetwork(eqx.Module):
-    linear_1: eqx.nn.Linear
-    linear_2: eqx.nn.Linear
-    linear_3: eqx.nn.Linear
+class BidirectionalLSTMPlanRecognitionNetwork(AbstractPlanRecognitionNetwork):
+    forward_cell: eqx.nn.LSTMCell
+    backward_cell: eqx.nn.LSTMCell
+    linear: eqx.nn.Linear
 
     def __init__(
         self,
-        input_output_dim: int,
-        feed_forward_dim: int,
-        key: jax.Array,
-    ):
-        key1, key2, key3 = jax.random.split(key, 3)
-        self.linear_1 = eqx.nn.Linear(
-            in_features=input_output_dim,
-            out_features=feed_forward_dim,
-            use_bias=False,
-            key=key1,
-        )
-        self.linear_2 = eqx.nn.Linear(
-            in_features=feed_forward_dim,
-            out_features=input_output_dim,
-            use_bias=False,
-            key=key2,
-        )
-        self.linear_3 = eqx.nn.Linear(
-            in_features=input_output_dim,
-            out_features=feed_forward_dim,
-            use_bias=False,
-            key=key3,
-        )
-
-    def __call__(self, x: Float[Array, " hidden"]) -> Float[Array, " hidden"]:
-        glu = jax.nn.swish(self.linear_1(x)) * self.linear_3(x)
-        return self.linear_2(glu)
-
-
-class TransformerBlock(eqx.Module):
-    pre_ff_norm: eqx.nn.RMSNorm
-    pre_mha_norm: eqx.nn.RMSNorm
-    mha: eqx.nn.MultiheadAttention
-    ff: FeedForwardNetwork
-    rope: eqx.nn.RotaryPositionalEmbedding
-
-    def __init__(
-        self,
-        d_model: int,
-        num_heads: int,
-        ff_dim: int,
-        rope: eqx.nn.RotaryPositionalEmbedding,
-        key: jax.Array,
-    ):
-        mha_key, ff_key = jax.random.split(key, 2)
-        self.pre_ff_norm = eqx.nn.RMSNorm(d_model, use_bias=False)
-        self.pre_mha_norm = eqx.nn.RMSNorm(d_model, use_bias=False)
-        self.mha = eqx.nn.MultiheadAttention(num_heads, d_model, key=mha_key)
-        self.ff = FeedForwardNetwork(d_model, ff_dim, ff_key)
-        self.rope = rope
-
-    def __call__(
-        self, x: Float[Array, "sequence d_model"], sequence_length: Int[Array, ""]
-    ) -> Float[Array, "sequence d_model"]:
-        def process_heads(
-            query_heads: Float[Array, "sequence num_heads qk_size"],
-            key_heads: Float[Array, "sequence num_heads qk_size"],
-            value_heads: Float[Array, "sequence num_heads vo_size"],
-        ) -> tuple[
-            Float[Array, "sequence num_heads qk_size"],
-            Float[Array, "sequence num_heads qk_size"],
-            Float[Array, "sequence num_heads vo_size"],
-        ]:
-            query_heads = jax.vmap(self.rope, in_axes=1, out_axes=1)(query_heads)
-            key_heads = jax.vmap(self.rope, in_axes=1, out_axes=1)(key_heads)
-            return query_heads, key_heads, value_heads
-
-        seq_indices = jnp.arange(x.shape[0])
-        attn_mask = jnp.logical_and(
-            seq_indices < sequence_length,
-            seq_indices.reshape(-1, 1) < sequence_length,
-        )
-        qkv = jax.vmap(self.pre_mha_norm)(x)
-        x = x + self.mha(
-            qkv, qkv, qkv, mask=attn_mask.astype(jnp.bool), process_heads=process_heads
-        )
-        x = x + jax.vmap(self.ff)(jax.vmap(self.pre_ff_norm)(x))
-        return x
-
-
-class PlanRecognitionTransformer(AbstractPlanRecognitionNetwork):
-    transformer_blocks: list[TransformerBlock]
-    z_linear: eqx.nn.Linear
-
-    def __init__(
-        self,
-        num_layers: int,
         d_obs: int,
-        num_heads: int,
-        ff_dim: int,
+        d_goal: int,
         d_latent: int,
-        rope_theta: float,
+        d_action: int,
+        hidden_size: int,
         key: jax.Array,
     ):
-        d_model = 64  # TODO: Change this when implementing Play-LMP
-        rope = eqx.nn.RotaryPositionalEmbedding(d_model // num_heads, rope_theta)
-        blocks_key, linear_key = jax.random.split(key)
-        self.transformer_blocks = [
-            TransformerBlock(d_model, num_heads, ff_dim, rope, key=block_key)
-            for block_key in jax.random.split(blocks_key, num_layers)
-        ]
-        self.z_linear = eqx.nn.Linear(d_model, 2 * d_latent, key=linear_key)
+        fw_key, bw_key, linear_key = jax.random.split(key, 3)
+        self.forward_cell = eqx.nn.LSTMCell(
+            d_obs + d_goal + d_action, hidden_size, key=fw_key
+        )
+        self.backward_cell = eqx.nn.LSTMCell(
+            d_obs + d_goal + d_action, hidden_size, key=bw_key
+        )
+        self.linear = eqx.nn.Linear(2 * hidden_size, 2 * d_latent, key=linear_key)
 
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_goal"],
+        actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 d_latent"]:
-        tokens = observations
-        for block in self.transformer_blocks:
-            tokens = block(tokens, sequence_length)
-        mask = jnp.arange(tokens.shape[0]).reshape(-1, 1) < sequence_length
-        pooled_tokens = jnp.mean(tokens, axis=0, where=mask)
+        padded_sequence_length = observations.shape[0]
+        input_features = jnp.concat(
+            [
+                observations,
+                repeat(goal, "... -> n ...", n=padded_sequence_length),
+                actions,
+            ],
+            axis=1,
+        )
+
+        def fw_scan(
+            state: tuple[Array, Array], input: Array
+        ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
+            output = self.forward_cell(input, state)
+            return output, output
+
+        def bw_scan(
+            state: tuple[Array, Array], input: Array
+        ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
+            output = self.backward_cell(input, state)
+            return output, output
+
+        init_state = (
+            jnp.zeros(self.forward_cell.hidden_size),
+            jnp.zeros(self.forward_cell.hidden_size),
+        )
+        _, (fw_hidden_states, _) = jax.lax.scan(fw_scan, init_state, input_features)
+        bw_input_features = jnp.roll(
+            input_features[::-1], sequence_length - padded_sequence_length, axis=0
+        )
+        _, (bw_hidden_states, _) = jax.lax.scan(bw_scan, init_state, bw_input_features)
+        bw_hidden_states = jnp.roll(
+            bw_hidden_states[::-1], sequence_length - padded_sequence_length, axis=0
+        )
+        feature_vector = jnp.mean(
+            jnp.concat([bw_hidden_states, fw_hidden_states], axis=1),
+            axis=0,
+            where=jnp.arange(padded_sequence_length).reshape(-1, 1) < sequence_length,
+        )
         mean, stddev = rearrange(
-            self.z_linear(pooled_tokens), "(x d_latent) -> x d_latent", x=2
+            self.linear(feature_vector), "(x d_latent) -> x d_latent", x=2
         )
         stddev = jax.nn.softplus(stddev)
         return jnp.stack([mean, stddev])
