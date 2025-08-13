@@ -394,6 +394,7 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
         d_goal: int,
         d_latent_plan: int,
         d_action: int,
+        hidden_size: int,
         num_dl_mixture_elements: int,
         action_max_bound: Float[Array, " d_action"],
         action_min_bound: Float[Array, " d_action"],
@@ -401,7 +402,9 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
         key: jax.Array,
     ):
         lstm_key, mlp_key = jax.random.split(key)
-        self.cell = eqx.nn.LSTMCell(d_obs + d_goal + d_latent_plan, 2048, key=lstm_key)
+        self.cell = eqx.nn.LSTMCell(
+            d_obs + d_goal + d_latent_plan, hidden_size, key=lstm_key
+        )
         mlp_keys = jax.random.split(mlp_key, 2)
         self.mlp = eqx.nn.Sequential(
             [

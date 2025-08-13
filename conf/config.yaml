@@ -55,6 +55,7 @@ model:
     d_goal: ${model.d_goal}
     d_latent_plan: ${model.d_latent}
     d_action: ${model.d_action}
+    hidden_size: 2048
     num_dl_mixture_elements: 6
     action_max_bound: ${model.target_action_max}
     action_min_bound: ${model.target_action_min}
