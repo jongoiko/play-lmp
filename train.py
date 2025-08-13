@@ -28,7 +28,7 @@ def main(cfg: DictConfig) -> None:
     dataset, env = get_dataset_and_env(cfg)
     observation_stats, goal_stats, action_stats = get_normalization_stats(cfg)
     random_key, model_key = jax.random.split(random_key)
-    model = get_model(cfg.model, model_key)
+    model = get_model(cfg.model, cfg.training.method, model_key)
     print(f"Total trainable parameters: {num_model_parameters(model):_}")
     mp_policy = jmp.get_policy(cfg.training.mixed_precision_policy)
     model = mp_policy.cast_to_param(model)
@@ -54,7 +54,9 @@ def main(cfg: DictConfig) -> None:
     )
 
 
-def get_model(cfg: DictConfig, key: jax.Array) -> PlayLMP:
+def get_model(cfg: DictConfig, method: str, key: jax.Array) -> PlayLMP:
+    if method != "play-lmp":
+        cfg.d_latent = 0
     plan_rec_key, plan_proposal_key, policy_key = jax.random.split(key, 3)
     plan_recognizer = hydra.utils.instantiate(cfg.plan_recognizer)(key=plan_rec_key)
     plan_proposal = hydra.utils.instantiate(cfg.plan_proposal)(key=plan_proposal_key)

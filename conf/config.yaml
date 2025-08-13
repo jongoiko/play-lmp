@@ -21,7 +21,7 @@ training:
 model:
   d_obs: 59
   d_goal: 12
-  d_latent: 0
+  d_latent: 64
   d_action: 9
   target_action_max:
     _target_: jax.numpy.ones
