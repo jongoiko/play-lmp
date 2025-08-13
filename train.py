@@ -335,6 +335,14 @@ def evaluate_policy(
         )
         return action, new_state
 
+    jit_preprocess_obs = jax.jit(
+        lambda obs: preprocess_observation(
+            obs, observation_stats[0], observation_stats[1]
+        )
+    )
+    jit_preprocess_goal = jax.jit(
+        lambda goal: preprocess_goal(goal, goal_stats[0], goal_stats[1])
+    )
     _, env = get_dataset_and_env(cfg, eval_env=True)
     num_successes = 0
     num_tasks, num_completions = 0, 0
@@ -347,16 +355,22 @@ def evaluate_policy(
             {k: jnp.atleast_2d(v) for k, v in obs["desired_goal"].items()}
         )[0]
         state = model.policy.reset()
+        plan = jnp.zeros(0)
         step = 0
         terminated = False
         while not terminated:
             if step % replan_every_n_steps == 0:
-                # TODO: Re-sample plan for Play-LMP
+                if model.plan_proposal.d_latent > 0:
+                    # Not GCBC but LMP, so we sample a plan from the prior
+                    sampling_params = model.plan_proposal(
+                        jit_preprocess_obs(obs["observation"]),
+                        jit_preprocess_goal(goal),
+                    )
+                    key, sampling_key = jax.random.split(key)
+                    plan = model.sample_plan(sampling_params, sampling_key)
                 state = model.policy.reset()
             key, sampling_key = jax.random.split(key)
-            action, state = act(
-                obs["observation"], goal, jnp.zeros(0), sampling_key, state
-            )
+            action, state = act(obs["observation"], goal, plan, sampling_key, state)
             obs, _, step_terminated, truncated, info, *_ = env.step(action)
             terminated = step_terminated or truncated
             step += 1
