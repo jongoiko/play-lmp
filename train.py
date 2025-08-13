@@ -144,22 +144,20 @@ def get_batch(
     achieved_goals = dataset.achieved_goals[episode_indices]
     actions = dataset.actions[episode_indices]
     episode_lengths = dataset.episode_lengths[episode_indices]
-    key, sampling_key = jax.random.split(key)
     min_episode_length, max_episode_length = (
         (cfg.gcbc_window_length_min, cfg.gcbc_window_length_max)
         if cfg.method == "play-gcbc"
         else 2 * (cfg.lmp_window_length,)
     )
-    start_indices = jax.random.randint(
-        sampling_key, (cfg.batch_size,), 0, episode_lengths - max_episode_length
+    key, sampling_key = jax.random.split(key)
+    window_lengths = jax.random.randint(
+        sampling_key, (cfg.batch_size,), min_episode_length, max_episode_length + 1
     )
     key, sampling_key = jax.random.split(key)
-    episode_lengths = jnp.minimum(
-        episode_lengths - start_indices,
-        jax.random.randint(
-            sampling_key, (cfg.batch_size,), min_episode_length, max_episode_length + 1
-        ),
+    start_indices = jax.random.randint(
+        sampling_key, (cfg.batch_size,), 0, episode_lengths - window_lengths
     )
+    episode_lengths = jnp.minimum(episode_lengths - start_indices, window_lengths)
 
     @jax.jit
     def take_slice(arr: Array) -> Array:
