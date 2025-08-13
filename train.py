@@ -12,10 +12,12 @@ import optax
 import tensorflow as tf
 from jaxtyping import Array
 from jaxtyping import Float
+from jaxtyping import PyTree
 from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
 from play_lmp import make_train_step
 from play_lmp import PlayLMP
+from play_lmp import postprocess_action
 from play_lmp import preprocess_action
 from play_lmp import preprocess_goal
 from play_lmp import preprocess_observation
@@ -25,7 +27,7 @@ from tqdm import tqdm
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     random_key = jax.random.PRNGKey(cfg.random_seed)
-    dataset, env = get_dataset_and_env(cfg)
+    dataset, env = get_dataset_and_env(cfg, eval_env=True)
     observation_stats, goal_stats, action_stats = get_normalization_stats(cfg)
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, cfg.training.method, model_key)
@@ -45,7 +47,7 @@ def main(cfg: DictConfig) -> None:
         dataset, observation_stats, goal_stats, action_stats, target_action_range
     )
     train(
-        cfg.training,
+        cfg,
         model,
         optimizer,
         preprocessed_dataset,
@@ -76,13 +78,13 @@ def train(
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
     opt_state = mp_policy.cast_to_param(opt_state)
     tb_writer = tf.summary.create_file_writer(
-        datetime.datetime.now().strftime(cfg.tensorboard_log_dir)
+        datetime.datetime.now().strftime(cfg.training.tensorboard_log_dir)
     )
     with tb_writer.as_default():
-        for step in range(cfg.num_steps):
+        for step in range(cfg.training.num_steps):
             key, step_key = jax.random.split(key)
             batch = get_batch(
-                cfg,
+                cfg.training,
                 dataset,
                 step_key,
             )
@@ -94,12 +96,34 @@ def train(
                 mp_policy,
                 batch,
                 step_key,
-                method=cfg.method,
-                beta=cfg.beta,
+                method=cfg.training.method,
+                beta=cfg.training.beta,
             )
             tf.summary.scalar("step_loss/train", float(loss), step=step)
             tb_writer.flush()
             print(f"Step {step}: Training loss {loss}")
+            if step % cfg.training.evaluate.every_n_steps == 0:
+                success_rate, task_completion_rate = evaluate_policy(
+                    cfg,
+                    eqx.nn.inference_mode(model),
+                    cfg.training.evaluate.num_episodes,
+                    cfg.training.evaluate.replan_every_n_steps,
+                )
+                tf.summary.scalar(
+                    "step_rollouts_eval/success_percentage",
+                    float(success_rate),
+                    step=step,
+                )
+                tf.summary.scalar(
+                    "step_rollouts_eval/task_completion_percentage",
+                    float(task_completion_rate),
+                    step=step,
+                )
+                tb_writer.flush()
+                print(
+                    f"Step {step}: Success percentage {success_rate}%, "
+                    + f"task completion percentage {task_completion_rate}%"
+                )
 
 
 def num_model_parameters(model: eqx.Module) -> int:
@@ -216,11 +240,11 @@ def preprocess_dataset(
 
 
 def get_dataset_and_env(
-    cfg: DictConfig,
+    cfg: DictConfig, eval_env: bool = False
 ) -> tuple[minari.MinariDataset, gym.Env]:
     dataset = minari.load_dataset("D4RL/kitchen/mixed-v2", download=True)
     dataset.set_seed(cfg.random_seed)
-    env = dataset.recover_environment(render_mode="rgb_array")
+    env = dataset.recover_environment(render_mode="rgb_array", eval_env=eval_env)
     return dataset, env
 
 
@@ -278,6 +302,70 @@ def get_normalization_stats(
         stats_path, observation=observation_stats, action=action_stats, goal=goal_stats
     )
     return observation_stats, goal_stats, action_stats
+
+
+def evaluate_policy(
+    cfg: DictConfig,
+    model: PlayLMP,
+    num_episodes: int,
+    replan_every_n_steps: int,
+) -> tuple[float, float]:
+    """
+    Returns a tuple (success, average_step_completion) in percentages.
+    """
+    observation_stats, goal_stats, action_stats = get_normalization_stats(cfg)
+    target_action_max = hydra.utils.instantiate(cfg.model.target_action_max)
+    target_action_min = hydra.utils.instantiate(cfg.model.target_action_min)
+
+    @eqx.filter_jit
+    def act(
+        obs: Array, goal: Array, plan: Array, key: Array, state: PyTree
+    ) -> tuple[Array, PyTree]:
+        action, new_state = model.policy.act(
+            preprocess_observation(obs, observation_stats[0], observation_stats[1]),
+            preprocess_goal(goal, goal_stats[0], goal_stats[1]),
+            plan,
+            key,
+            state,
+        )
+        action = postprocess_action(
+            action,
+            action_stats[0],
+            action_stats[1],
+            target_action_max,
+            target_action_min,
+        )
+        return action, new_state
+
+    _, env = get_dataset_and_env(cfg, eval_env=True)
+    num_successes = 0
+    num_tasks, num_completions = 0, 0
+    env.reset(seed=cfg.random_seed)
+    key = jax.random.PRNGKey(cfg.random_seed)
+    for _ in tqdm(range(num_episodes), desc="Evaluating trained policy"):
+        obs, info = env.reset()
+        num_tasks += len(info["tasks_to_complete"])
+        goal = pack_goals(
+            {k: jnp.atleast_2d(v) for k, v in obs["desired_goal"].items()}
+        )[0]
+        state = model.policy.reset()
+        step = 0
+        terminated = False
+        while not terminated:
+            if step % replan_every_n_steps == 0:
+                # TODO: Re-sample plan for Play-LMP
+                state = model.policy.reset()
+            key, sampling_key = jax.random.split(key)
+            action, state = act(
+                obs["observation"], goal, jnp.zeros(0), sampling_key, state
+            )
+            obs, _, step_terminated, truncated, info, *_ = env.step(action)
+            terminated = step_terminated or truncated
+            step += 1
+        num_completions += len(info["episode_task_completions"])
+        if not info["tasks_to_complete"]:
+            num_successes += 1
+    return 100 * num_successes / num_episodes, 100 * num_completions / num_tasks
 
 
 if __name__ == "__main__":

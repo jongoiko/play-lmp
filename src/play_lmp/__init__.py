@@ -13,6 +13,7 @@ with install_import_hook("play_lmp", "beartype.beartype"):
     from ._nn import preprocess_action
     from ._nn import preprocess_goal
     from ._nn import preprocess_observation
+    from ._nn import postprocess_action
     from ._play_lmp import PlayLMP
     from ._training import EpisodeBatch
     from ._training import make_train_step

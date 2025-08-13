@@ -40,6 +40,17 @@ def preprocess_action(
     return zero_one * (target_max - target_min) + target_min
 
 
+def postprocess_action(
+    action: Float[Array, " d_action"],
+    max: Float[Array, " d_action"],
+    min: Float[Array, " d_action"],
+    target_max: Float[Array, " d_action"],
+    target_min: Float[Array, " d_action"],
+) -> Float[Array, " d_action"]:
+    zero_one = (action - target_min) / (target_max - target_min)
+    return zero_one * (max - min) + min
+
+
 class FeedForwardNetwork(eqx.Module):
     linear_1: eqx.nn.Linear
     linear_2: eqx.nn.Linear
