@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import jmp
 import minari
 import optax
-import tensorflow as tf
 from jaxtyping import Array
 from jaxtyping import Float
 from jaxtyping import PyTree
@@ -21,6 +20,7 @@ from play_lmp import postprocess_action
 from play_lmp import preprocess_action
 from play_lmp import preprocess_goal
 from play_lmp import preprocess_observation
+from tensorboardX import SummaryWriter
 from tqdm import tqdm
 
 
@@ -77,55 +77,53 @@ def train(
 ) -> None:
     opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
     opt_state = mp_policy.cast_to_param(opt_state)
-    tb_writer = tf.summary.create_file_writer(
+    tb_writer = SummaryWriter(
         datetime.datetime.now().strftime(cfg.training.tensorboard_log_dir)
     )
-    with tb_writer.as_default():
-        for step in range(cfg.training.num_steps):
-            key, step_key = jax.random.split(key)
-            batch = get_batch(
-                cfg.training,
-                dataset,
-                step_key,
+    for step in range(cfg.training.num_steps):
+        key, step_key = jax.random.split(key)
+        batch = get_batch(
+            cfg.training,
+            dataset,
+            step_key,
+        )
+        key, step_key = jax.random.split(key)
+        model, opt_state, loss, stats = eqx.filter_jit(make_train_step)(
+            model,
+            optimizer,
+            opt_state,
+            mp_policy,
+            batch,
+            step_key,
+            method=cfg.training.method,
+            beta=cfg.training.beta,
+        )
+        tb_writer.add_scalar("step_loss/train", float(loss), step)
+        for stats_key, value in stats.items():
+            tb_writer.add_scalar(f"step_{stats_key}/train", float(value), step)
+        print(f"Step {step}: Training loss {loss}")
+        if step % cfg.training.evaluate.every_n_steps == 0:
+            success_rate, task_completion_rate = evaluate_policy(
+                cfg,
+                eqx.nn.inference_mode(model),
+                cfg.training.evaluate.num_episodes,
+                cfg.training.evaluate.replan_every_n_steps,
             )
-            key, step_key = jax.random.split(key)
-            model, opt_state, loss, stats = eqx.filter_jit(make_train_step)(
-                model,
-                optimizer,
-                opt_state,
-                mp_policy,
-                batch,
-                step_key,
-                method=cfg.training.method,
-                beta=cfg.training.beta,
+            tb_writer.add_scalar(
+                "step_rollouts_eval/success_percentage",
+                float(success_rate),
+                step,
             )
-            tf.summary.scalar("step_loss/train", float(loss), step=step)
-            for stats_key, value in stats.items():
-                tf.summary.scalar(f"step_{stats_key}/train", float(value), step=step)
-            tb_writer.flush()
-            print(f"Step {step}: Training loss {loss}")
-            if step % cfg.training.evaluate.every_n_steps == 0:
-                success_rate, task_completion_rate = evaluate_policy(
-                    cfg,
-                    eqx.nn.inference_mode(model),
-                    cfg.training.evaluate.num_episodes,
-                    cfg.training.evaluate.replan_every_n_steps,
-                )
-                tf.summary.scalar(
-                    "step_rollouts_eval/success_percentage",
-                    float(success_rate),
-                    step=step,
-                )
-                tf.summary.scalar(
-                    "step_rollouts_eval/task_completion_percentage",
-                    float(task_completion_rate),
-                    step=step,
-                )
-                tb_writer.flush()
-                print(
-                    f"Step {step}: Success percentage {success_rate}%, "
-                    + f"task completion percentage {task_completion_rate}%"
-                )
+            tb_writer.add_scalar(
+                "step_rollouts_eval/task_completion_percentage",
+                float(task_completion_rate),
+                step,
+            )
+            print(
+                f"Step {step}: Success percentage {success_rate}%, "
+                + f"task completion percentage {task_completion_rate}%"
+            )
+        tb_writer.flush()
 
 
 def num_model_parameters(model: eqx.Module) -> int:

@@ -16,10 +16,9 @@ dependencies = [
     "jax[cuda12]>=0.7.0",
     "jaxtyping>=0.3.2",
     "jmp>=0.0.4",
-    "language-table",
-    "minari>=0.5.3",
+    "minari[all]>=0.5.3",
     "optax>=0.2.5",
-    "tf-nightly<2.21",
+    "tensorboardx>=2.6.4",
     "tqdm>=4.67.1",
 ]
 
@@ -29,9 +28,6 @@ play-lmp = "play_lmp:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.uv.sources]
-language-table = { git = "https://github.com/google-research/language-table" }
 
 [dependency-groups]
 dev = [
