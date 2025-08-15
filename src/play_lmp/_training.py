@@ -31,7 +31,7 @@ def make_train_step(
     batch: EpisodeBatch,
     key: jax.Array,
     method: Literal["play-lmp", "play-gcbc"],
-    beta: float = 0.0,
+    beta: float,
 ) -> tuple[PlayLMP, PyTree, Float[Array, ""], dict]:
     model, batch = mp_policy.cast_to_compute((model, batch))
     stats = {}
@@ -51,7 +51,7 @@ def make_train_step(
 
 
 def play_lmp_loss(
-    model: PlayLMP, batch: EpisodeBatch, key: jax.Array, beta: float = 0.5
+    model: PlayLMP, batch: EpisodeBatch, key: jax.Array, beta: float
 ) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:
     def instance_loss(
         observations: Float[Array, "time d_obs"],
