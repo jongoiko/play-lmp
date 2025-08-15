@@ -89,7 +89,7 @@ def train(
                 step_key,
             )
             key, step_key = jax.random.split(key)
-            model, opt_state, loss = eqx.filter_jit(make_train_step)(
+            model, opt_state, loss, stats = eqx.filter_jit(make_train_step)(
                 model,
                 optimizer,
                 opt_state,
@@ -100,6 +100,8 @@ def train(
                 beta=cfg.training.beta,
             )
             tf.summary.scalar("step_loss/train", float(loss), step=step)
+            for stats_key, value in stats.items():
+                tf.summary.scalar(f"step_{stats_key}/train", float(value), step=step)
             tb_writer.flush()
             print(f"Step {step}: Training loss {loss}")
             if step % cfg.training.evaluate.every_n_steps == 0:

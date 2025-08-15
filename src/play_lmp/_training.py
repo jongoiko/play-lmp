@@ -32,29 +32,34 @@ def make_train_step(
     key: jax.Array,
     method: Literal["play-lmp", "play-gcbc"],
     beta: float = 0.0,
-) -> tuple[PlayLMP, PyTree, Float[Array, ""]]:
+) -> tuple[PlayLMP, PyTree, Float[Array, ""], dict]:
     model, batch = mp_policy.cast_to_compute((model, batch))
+    stats = {}
     if method == "play-gcbc":
         loss_value, grads = eqx.filter_value_and_grad(play_gcbc_loss)(model, batch)
     elif method == "play-lmp":
-        loss_value, grads = eqx.filter_value_and_grad(play_lmp_loss)(
+        loss_value, reconstruction_loss, kl_loss = play_lmp_loss(
             model, batch, key, beta
         )
+        grads = eqx.filter_grad(
+            lambda model, batch, key, beta: play_lmp_loss(model, batch, key, beta)[0]
+        )(model, batch, key, beta)
+        stats = {"reconstruction_loss": reconstruction_loss, "kl_loss": kl_loss}
     updates, opt_state = optim.update(grads, opt_state, eqx.filter(model, eqx.is_array))
     model = eqx.apply_updates(model, updates)
-    return model, opt_state, loss_value
+    return model, opt_state, loss_value, stats
 
 
 def play_lmp_loss(
     model: PlayLMP, batch: EpisodeBatch, key: jax.Array, beta: float = 0.5
-) -> Float[Array, ""]:
+) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:
     def instance_loss(
         observations: Float[Array, "time d_obs"],
         achieved_goals: Float[Array, "time d_goal"],
         actions: Float[Array, "time d_action"],
         episode_length: Int[Array, ""],
         key: jax.Array,
-    ) -> Float[Array, ""]:
+    ) -> tuple[Float[Array, ""], Float[Array, ""]]:
         goal = achieved_goals[episode_length - 1]
         posterior_plan_params, prior_plan_params = model(
             observations, goal, actions, episode_length
@@ -66,16 +71,17 @@ def play_lmp_loss(
             where=jnp.arange(observations.shape[0]) < episode_length,
         )
         kl_loss = kl_div_diagonal_gaussians(posterior_plan_params, prior_plan_params)
-        return action_reconstruction_loss + beta * kl_loss
+        return action_reconstruction_loss, kl_loss
 
-    batch_losses = jax.vmap(instance_loss)(
+    action_reconstruction_losses, kl_losses = jax.vmap(instance_loss)(
         batch.observations,
         batch.achieved_goals,
         batch.actions,
         batch.episode_lengths,
         jax.random.split(key, batch.observations.shape[0]),
     )
-    return jnp.mean(batch_losses)
+    loss = jnp.mean(action_reconstruction_losses + beta * kl_losses)
+    return loss, jnp.mean(action_reconstruction_losses), jnp.mean(kl_losses)
 
 
 def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
