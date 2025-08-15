@@ -123,7 +123,7 @@ class BidirectionalLSTMPlanRecognitionNetwork(AbstractPlanRecognitionNetwork):
         mean, stddev = rearrange(
             self.linear(feature_vector), "(x d_latent) -> x d_latent", x=2
         )
-        stddev = jax.nn.softplus(stddev)
+        stddev = jax.nn.softplus(stddev) + 1e-8
         return jnp.stack([mean, stddev])
 
 
@@ -151,7 +151,7 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
         mean, stddev = rearrange(
             self.mlp(jnp.concat([observation, goal])), "(x d_latent) -> x d_latent", x=2
         )
-        stddev = jax.nn.softplus(stddev)
+        stddev = jax.nn.softplus(stddev) + 1e-8
         return jnp.stack([mean, stddev])
 
 
