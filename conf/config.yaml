@@ -15,8 +15,10 @@ training:
       - _target_: optax.adamw
         learning_rate: 1e-3
   num_steps: 100000
-  method: play-gcbc
+  method: play-lmp
   beta: 0.01
+  save_model_every_n_steps: 200
+  model_save_path: model.eqx
 model:
   d_obs: 59
   d_latent: 64

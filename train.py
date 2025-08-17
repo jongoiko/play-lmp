@@ -100,6 +100,8 @@ def train(
             tb_writer.add_scalar(f"step_{stats_key}/train", float(value), step)
         print(f"Step {step}: Training loss {loss}")
         tb_writer.flush()
+        if step % cfg.training.save_model_every_n_steps == 0:
+            eqx.tree_serialise_leaves(cfg.training.model_save_path, model)
 
 
 def num_model_parameters(model: eqx.Module) -> int:
