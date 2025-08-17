@@ -11,14 +11,11 @@ import minari
 import optax
 from jaxtyping import Array
 from jaxtyping import Float
-from jaxtyping import PyTree
 from omegaconf import DictConfig
 from play_lmp import EpisodeBatch
 from play_lmp import make_train_step
 from play_lmp import PlayLMP
-from play_lmp import postprocess_action
 from play_lmp import preprocess_action
-from play_lmp import preprocess_goal
 from play_lmp import preprocess_observation
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
@@ -28,7 +25,7 @@ from tqdm import tqdm
 def main(cfg: DictConfig) -> None:
     random_key = jax.random.PRNGKey(cfg.random_seed)
     dataset, _ = get_dataset_and_env(cfg, eval_env=True)
-    observation_stats, goal_stats, action_stats = get_normalization_stats(cfg)
+    observation_stats, action_stats = get_normalization_stats(cfg)
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, cfg.training.method, model_key)
     print(f"Total trainable parameters: {num_model_parameters(model):_}")
@@ -44,7 +41,7 @@ def main(cfg: DictConfig) -> None:
         ]
     )
     preprocessed_dataset = preprocess_dataset(
-        dataset, observation_stats, goal_stats, action_stats, target_action_range
+        dataset, observation_stats, action_stats, target_action_range
     )
     train(
         cfg,
@@ -102,27 +99,6 @@ def train(
         for stats_key, value in stats.items():
             tb_writer.add_scalar(f"step_{stats_key}/train", float(value), step)
         print(f"Step {step}: Training loss {loss}")
-        if step % cfg.training.evaluate.every_n_steps == 0:
-            success_rate, task_completion_rate = evaluate_policy(
-                cfg,
-                eqx.nn.inference_mode(model),
-                cfg.training.evaluate.num_episodes,
-                cfg.training.evaluate.replan_every_n_steps,
-            )
-            tb_writer.add_scalar(
-                "step_rollouts_eval/success_percentage",
-                float(success_rate),
-                step,
-            )
-            tb_writer.add_scalar(
-                "step_rollouts_eval/task_completion_percentage",
-                float(task_completion_rate),
-                step,
-            )
-            print(
-                f"Step {step}: Success percentage {success_rate}%, "
-                + f"task completion percentage {task_completion_rate}%"
-            )
         tb_writer.flush()
 
 
@@ -138,10 +114,9 @@ def get_batch(
 ) -> EpisodeBatch:
     key, sampling_key = jax.random.split(key)
     episode_indices = jax.random.randint(
-        sampling_key, (cfg.batch_size,), 0, dataset.achieved_goals.shape[0]
+        sampling_key, (cfg.batch_size,), 0, dataset.observations.shape[0]
     )
     observations = dataset.observations[episode_indices]
-    achieved_goals = dataset.achieved_goals[episode_indices]
     actions = dataset.actions[episode_indices]
     episode_lengths = dataset.episode_lengths[episode_indices]
     min_episode_length, max_episode_length = (
@@ -166,38 +141,25 @@ def get_batch(
 
     return EpisodeBatch(
         take_slice(observations),
-        take_slice(achieved_goals),
         take_slice(actions),
         episode_lengths,
     )
 
 
-def pack_goals(goals: dict) -> Array:
-    keys = ["bottom burner", "kettle", "light switch", "microwave"]
-    return jnp.concat([goals[key] for key in keys], axis=1)
-
-
 def preprocess_dataset(
     dataset: minari.MinariDataset,
     observation_stats: Array,
-    goal_stats: Array,
     action_stats: Array,
     target_action_range: Array,
 ) -> EpisodeBatch:
     padding_length = 1024
-    observations, achieved_goals, actions, episode_lengths = [], [], [], []
+    observations, actions, episode_lengths = [], [], []
     for episode in tqdm(dataset, desc="Preprocessing dataset episodes"):
         length = episode.truncations.size
         episode_lengths.append(length)
         observations.append(
             jnp.pad(
                 episode.observations["observation"][:-1],
-                ((0, padding_length - length), (0, 0)),
-            )
-        )
-        achieved_goals.append(
-            jnp.pad(
-                pack_goals(episode.observations["achieved_goal"])[:-1],
                 ((0, padding_length - length), (0, 0)),
             )
         )
@@ -208,7 +170,6 @@ def preprocess_dataset(
             )
         )
     observations = jnp.stack(observations)
-    achieved_goals = jnp.stack(achieved_goals)
     actions = jnp.stack(actions)
     observations = jax.jit(
         jax.vmap(
@@ -228,13 +189,7 @@ def preprocess_dataset(
         target_action_range[0],
         target_action_range[1],
     )
-    achieved_goals = jax.vmap(
-        jax.vmap(preprocess_goal, in_axes=(0, None, None)),
-        in_axes=(0, None, None),
-    )(achieved_goals, goal_stats[0], goal_stats[1])
-    return EpisodeBatch(
-        observations, achieved_goals, actions, jnp.asarray(episode_lengths)
-    )
+    return EpisodeBatch(observations, actions, jnp.asarray(episode_lengths))
 
 
 def get_dataset_and_env(
@@ -248,159 +203,45 @@ def get_dataset_and_env(
 
 def get_normalization_stats(
     cfg: DictConfig,
-) -> tuple[
-    Float[Array, "2 d_obs"], Float[Array, "2 d_goal"], Float[Array, "2 d_action"]
-]:
+) -> tuple[Float[Array, "2 d_obs"], Float[Array, "2 d_action"]]:
     stats_path = Path(cfg.training.normalization_stats_path)
     if stats_path.exists():
         stats = jnp.load(stats_path)
         return (
             jnp.asarray(stats["observation"]),
-            jnp.asarray(stats["goal"]),
             jnp.asarray(stats["action"]),
         )
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     dataset, _ = get_dataset_and_env(cfg)
-    observation_episode_means, goal_episode_means = [], []
+    observation_episode_means = []
     action_episode_max, action_episode_min = [], []
     for episode in tqdm(dataset, desc="Calculating mean"):
         observations = jnp.asarray(episode.observations["observation"])
         actions = jnp.asarray(episode.actions)
-        goals = jnp.concat(episode.observations["achieved_goal"].values(), axis=1)
         observation_episode_means.append(observations.mean(axis=0))
-        goal_episode_means.append(goals.mean(axis=0))
         action_episode_max.append(actions.max(axis=0))
         action_episode_min.append(actions.min(axis=0))
     observation_mean = jnp.mean(jnp.stack(observation_episode_means), axis=0)
-    goal_mean = jnp.mean(jnp.stack(goal_episode_means), axis=0)
     action_max = jnp.max(jnp.stack(action_episode_max), axis=0)
     action_min = jnp.min(jnp.stack(action_episode_min), axis=0)
     action_stats = jnp.stack([action_max, action_min])
     del (
         observation_episode_means,
-        goal_episode_means,
         action_episode_max,
         action_episode_min,
     )
-    observation_episode_variances, goal_episode_variances = [], []
+    observation_episode_variances = []
     for episode in tqdm(dataset, desc="Calculating stddev"):
         observations = jnp.asarray(episode.observations["observation"])
-        goals = jnp.concat(episode.observations["achieved_goal"].values(), axis=1)
         observation_episode_variances.append(
             jnp.square(observations - observation_mean).mean(axis=0)
         )
-        goal_episode_variances.append(jnp.square(goals - goal_mean).mean(axis=0))
     observation_std = jnp.sqrt(
         jnp.mean(jnp.stack(observation_episode_variances), axis=0)
     )
-    goal_std = jnp.sqrt(jnp.mean(jnp.stack(goal_episode_variances), axis=0))
     observation_stats = jnp.stack([observation_mean, observation_std])
-    goal_stats = jnp.stack([goal_mean, goal_std])
-    jnp.savez(
-        stats_path, observation=observation_stats, action=action_stats, goal=goal_stats
-    )
-    return observation_stats, goal_stats, action_stats
-
-
-def evaluate_policy(
-    cfg: DictConfig,
-    model: PlayLMP,
-    num_episodes: int,
-    replan_every_n_steps: int,
-) -> tuple[float, float]:
-    """
-    Returns a tuple (success, average_step_completion) in percentages.
-    """
-    observation_stats, goal_stats, action_stats = get_normalization_stats(cfg)
-    target_action_max = hydra.utils.instantiate(cfg.model.target_action_max)
-    target_action_min = hydra.utils.instantiate(cfg.model.target_action_min)
-
-    jit_preprocess_obs = jax.jit(
-        lambda obs: preprocess_observation(
-            obs, observation_stats[0], observation_stats[1]
-        )
-    )
-    jit_preprocess_goal = jax.jit(
-        lambda goal: preprocess_goal(goal, goal_stats[0], goal_stats[1])
-    )
-    _, env = get_dataset_and_env(cfg, eval_env=True)
-    num_successes = 0
-    num_tasks, num_completions = 0, 0
-    env.reset(seed=cfg.random_seed)
-    key = jax.random.PRNGKey(cfg.random_seed)
-    for _ in tqdm(range(num_episodes), desc="Evaluating trained policy"):
-        obs, info = env.reset()
-        num_tasks += len(info["tasks_to_complete"])
-        goal = pack_goals(
-            {k: jnp.atleast_2d(v) for k, v in obs["desired_goal"].items()}
-        )[0]
-        state = model.policy.reset()
-        plan = jnp.zeros(0)
-        step = 0
-        terminated = False
-        while not terminated:
-            if step % replan_every_n_steps == 0:
-                if model.plan_proposal.d_latent > 0:
-                    # Not GCBC but LMP, so we sample a plan from the prior
-                    sampling_params = model.plan_proposal(
-                        jit_preprocess_obs(obs["observation"]),
-                        jit_preprocess_goal(goal),
-                    )
-                    key, sampling_key = jax.random.split(key)
-                    plan = model.sample_plan(sampling_params, sampling_key)
-                state = model.policy.reset()
-            key, sampling_key = jax.random.split(key)
-            action, state = _policy_act(
-                model,
-                obs["observation"],
-                goal,
-                plan,
-                sampling_key,
-                state,
-                observation_stats,
-                goal_stats,
-                action_stats,
-                target_action_max,
-                target_action_min,
-            )
-            obs, _, step_terminated, truncated, info, *_ = env.step(action)
-            terminated = step_terminated or truncated
-            step += 1
-        num_completions += len(info["episode_task_completions"])
-        if not info["tasks_to_complete"]:
-            num_successes += 1
-    return 100 * num_successes / num_episodes, 100 * num_completions / num_tasks
-
-
-@eqx.filter_jit
-def _policy_act(
-    model: PlayLMP,
-    obs: Array,
-    goal: Array,
-    plan: Array,
-    key: Array,
-    state: PyTree,
-    observation_stats: Array,
-    goal_stats: Array,
-    action_stats: Array,
-    target_action_max: Array,
-    target_action_min: Array,
-) -> tuple[Array, PyTree]:
-    action, new_state = model.policy.act(
-        preprocess_observation(obs, observation_stats[0], observation_stats[1]),
-        preprocess_goal(goal, goal_stats[0], goal_stats[1]),
-        plan,
-        key,
-        state,
-    )
-    action = postprocess_action(
-        action,
-        action_stats[0],
-        action_stats[1],
-        target_action_max,
-        target_action_min,
-    )
-    return action, new_state
+    jnp.savez(stats_path, observation=observation_stats, action=action_stats)
+    return observation_stats, action_stats
 
 
 if __name__ == "__main__":

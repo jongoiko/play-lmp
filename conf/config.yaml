@@ -13,13 +13,8 @@ training:
   num_steps: 100000
   method: play-gcbc
   beta: 0.01
-  evaluate:
-    every_n_steps: 1000
-    num_episodes: 20
-    replan_every_n_steps: 48
 model:
   d_obs: 59
-  d_goal: 12
   d_latent: 64
   d_action: 9
   target_action_max:
@@ -35,7 +30,6 @@ model:
     _partial_: true
     _target_: play_lmp.BidirectionalLSTMPlanRecognitionNetwork
     d_obs: ${model.d_obs}
-    d_goal: ${model.d_goal}
     d_action: ${model.d_action}
     d_latent: ${model.d_latent}
     hidden_size: 1024
@@ -43,7 +37,6 @@ model:
     _partial_: true
     _target_: play_lmp.MLPPlanProposalNetwork
     d_obs: ${model.d_obs}
-    d_goal: ${model.d_goal}
     d_latent: ${model.d_latent}
     width_size: 512
     depth: 3
@@ -51,7 +44,6 @@ model:
     _partial_: true
     _target_: play_lmp.LSTMPolicyNetwork
     d_obs: ${model.d_obs}
-    d_goal: ${model.d_goal}
     d_latent_plan: ${model.d_latent}
     d_action: ${model.d_action}
     hidden_size: 2048

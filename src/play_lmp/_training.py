@@ -18,7 +18,6 @@ from ._play_lmp import PlayLMP
 @dataclasses.dataclass
 class EpisodeBatch:
     observations: Float[Array, "batch time d_obs"]
-    achieved_goals: Float[Array, "batch time d_goal"]
     actions: Float[Array, "batch time d_action"]
     episode_lengths: Int[Array, " batch"]
 
@@ -55,12 +54,11 @@ def play_lmp_loss(
 ) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:
     def instance_loss(
         observations: Float[Array, "time d_obs"],
-        achieved_goals: Float[Array, "time d_goal"],
         actions: Float[Array, "time d_action"],
         episode_length: Int[Array, ""],
         key: jax.Array,
     ) -> tuple[Float[Array, ""], Float[Array, ""]]:
-        goal = achieved_goals[episode_length - 1]
+        goal = observations[episode_length - 1]
         posterior_plan_params, prior_plan_params = model(
             observations, goal, actions, episode_length
         )
@@ -75,7 +73,6 @@ def play_lmp_loss(
 
     action_reconstruction_losses, kl_losses = jax.vmap(instance_loss)(
         batch.observations,
-        batch.achieved_goals,
         batch.actions,
         batch.episode_lengths,
         jax.random.split(key, batch.observations.shape[0]),
@@ -87,11 +84,10 @@ def play_lmp_loss(
 def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
     def instance_loss(
         observations: Float[Array, "time d_obs"],
-        achieved_goals: Float[Array, "time d_goal"],
         actions: Float[Array, "time d_action"],
         episode_length: Int[Array, ""],
     ) -> Float[Array, ""]:
-        goal = achieved_goals[episode_length - 1]
+        goal = observations[episode_length - 1]
         action_log_likelihoods = model.policy(
             observations,
             goal,
@@ -105,7 +101,6 @@ def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
 
     batch_losses = jax.vmap(instance_loss)(
         batch.observations,
-        batch.achieved_goals,
         batch.actions,
         batch.episode_lengths,
     )

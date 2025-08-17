@@ -21,14 +21,6 @@ def preprocess_observation(
     return (obs - mean) / std
 
 
-def preprocess_goal(
-    goal: Float[Array, " d_goal"],
-    mean: Float[Array, " d_goal"],
-    std: Float[Array, " d_goal"],
-) -> Float[Array, " d_goal"]:
-    return (goal - mean) / std
-
-
 def preprocess_action(
     action: Float[Array, " d_action"],
     max: Float[Array, " d_action"],
@@ -59,25 +51,19 @@ class BidirectionalLSTMPlanRecognitionNetwork(AbstractPlanRecognitionNetwork):
     def __init__(
         self,
         d_obs: int,
-        d_goal: int,
         d_latent: int,
         d_action: int,
         hidden_size: int,
         key: jax.Array,
     ):
         fw_key, bw_key, linear_key = jax.random.split(key, 3)
-        self.forward_cell = eqx.nn.LSTMCell(
-            d_obs + d_goal + d_action, hidden_size, key=fw_key
-        )
-        self.backward_cell = eqx.nn.LSTMCell(
-            d_obs + d_goal + d_action, hidden_size, key=bw_key
-        )
+        self.forward_cell = eqx.nn.LSTMCell(d_obs + d_action, hidden_size, key=fw_key)
+        self.backward_cell = eqx.nn.LSTMCell(d_obs + d_action, hidden_size, key=bw_key)
         self.linear = eqx.nn.Linear(2 * hidden_size, 2 * d_latent, key=linear_key)
 
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
         actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 d_latent"]:
@@ -85,7 +71,6 @@ class BidirectionalLSTMPlanRecognitionNetwork(AbstractPlanRecognitionNetwork):
         input_features = jnp.concat(
             [
                 observations,
-                repeat(goal, "... -> n ...", n=padded_sequence_length),
                 actions,
             ],
             axis=1,
@@ -134,19 +119,18 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
     def __init__(
         self,
         d_obs: int,
-        d_goal: int,
         d_latent: int,
         width_size: int,
         depth: int,
         key: jax.Array,
     ):
         self.d_latent = d_latent
-        self.mlp = eqx.nn.MLP(d_obs + d_goal, 2 * d_latent, width_size, depth, key=key)
+        self.mlp = eqx.nn.MLP(2 * d_obs, 2 * d_latent, width_size, depth, key=key)
 
     def __call__(
         self,
         observation: Float[Array, " d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
     ) -> Float[Array, "2 d_latent"]:
         mean, stddev = rearrange(
             self.mlp(jnp.concat([observation, goal])), "(x d_latent) -> x d_latent", x=2
@@ -236,7 +220,6 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
     def __init__(
         self,
         d_obs: int,
-        d_goal: int,
         d_latent_plan: int,
         d_action: int,
         width_size: int,
@@ -248,7 +231,7 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
         key: jax.Array,
     ):
         self.mlp = eqx.nn.MLP(
-            d_obs + d_goal + d_latent_plan,
+            2 * d_obs + d_latent_plan,
             3 * num_dl_mixture_elements * d_action,
             width_size,
             depth,
@@ -262,7 +245,7 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
     def _get_dlml_parameters(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         plan: Float[Array, " d_latent"],
     ) -> tuple[
         Float[Array, "time d_action k"],
@@ -289,7 +272,7 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, " time"]:
@@ -315,7 +298,7 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
     def act(
         self,
         observation: Float[Array, " d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         plan: Float[Array, " d_latent"],
         key: jax.Array,
         state: PyTree,
@@ -340,7 +323,6 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
     def __init__(
         self,
         d_obs: int,
-        d_goal: int,
         d_latent_plan: int,
         d_action: int,
         hidden_size: int,
@@ -352,7 +334,7 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
     ):
         lstm_key, mlp_key = jax.random.split(key)
         self.cell = eqx.nn.LSTMCell(
-            d_obs + d_goal + d_latent_plan, hidden_size, key=lstm_key
+            2 * d_obs + d_latent_plan, hidden_size, key=lstm_key
         )
         mlp_keys = jax.random.split(mlp_key, 2)
         self.mlp = eqx.nn.Sequential(
@@ -372,7 +354,7 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
     def _get_lstm_input_features(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, "time d"]:
         sequence_length = observations.shape[0]
@@ -389,7 +371,7 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
     def _get_dlml_parameters(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         plan: Float[Array, " d_latent"],
     ) -> tuple[
         Float[Array, "time d_action k"],
@@ -423,7 +405,7 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, " time"]:
@@ -452,7 +434,7 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
     def act(
         self,
         observation: Float[Array, " d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         plan: Float[Array, " d_latent"],
         key: jax.Array,
         state: PyTree,

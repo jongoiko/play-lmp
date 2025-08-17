@@ -14,7 +14,6 @@ class AbstractPlanRecognitionNetwork(eqx.Module):
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
         actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 d_latent"]:
@@ -28,7 +27,7 @@ class AbstractPlanProposalNetwork(eqx.Module):
     def __call__(
         self,
         observation: Float[Array, " d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
     ) -> Float[Array, "2 d_latent"]:
         raise NotImplementedError
 
@@ -38,7 +37,7 @@ class AbstractPolicyNetwork(eqx.Module):
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         actions: Float[Array, "time d_action"],
         plan: Float[Array, " d_latent"],
     ) -> Float[Array, " time"]:
@@ -52,7 +51,7 @@ class AbstractPolicyNetwork(eqx.Module):
     def act(
         self,
         observation: Float[Array, " d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         plan: Float[Array, " d_latent"],
         key: jax.Array,
         state: PyTree,
@@ -78,13 +77,11 @@ class PlayLMP(eqx.Module):
     def __call__(
         self,
         observations: Float[Array, "time d_obs"],
-        goal: Float[Array, " d_goal"],
+        goal: Float[Array, " d_obs"],
         actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
     ) -> Float[Array, "2 2 d_latent"]:
-        sequence_plan = self.plan_recognizer(
-            observations, goal, actions, sequence_length
-        )
+        sequence_plan = self.plan_recognizer(observations, actions, sequence_length)
         state_goal_plan = self.plan_proposal(observations[0], goal)
         return jnp.stack([sequence_plan, state_goal_plan])
 
