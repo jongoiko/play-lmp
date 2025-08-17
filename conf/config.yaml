@@ -8,8 +8,12 @@ training:
   batch_size: 256
   mixed_precision_policy: p=f32,c=bf16
   optimizer:
-    _target_: optax.adamw
-    learning_rate: 1e-3
+    _target_: optax.chain
+    _args_:
+      - _target_: optax.clip_by_global_norm
+        max_norm: 1.0
+      - _target_: optax.adamw
+        learning_rate: 1e-3
   num_steps: 100000
   method: play-gcbc
   beta: 0.01
