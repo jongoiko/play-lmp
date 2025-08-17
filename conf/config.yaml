@@ -34,21 +34,21 @@ model:
       - -1.0
   plan_recognizer:
     _partial_: true
-    _target_: play_lmp.BidirectionalLSTMPlanRecognitionNetwork
+    _target_: play_lmp.encoders.BidirectionalLSTMPlanRecognitionNetwork
     d_obs: ${model.d_obs}
     d_action: ${model.d_action}
     d_latent: ${model.d_latent}
     hidden_size: 512
   plan_proposal:
     _partial_: true
-    _target_: play_lmp.MLPPlanProposalNetwork
+    _target_: play_lmp.encoders.MLPPlanProposalNetwork
     d_obs: ${model.d_obs}
     d_latent: ${model.d_latent}
     width_size: 512
     depth: 3
   policy:
     _partial_: true
-    _target_: play_lmp.LSTMPolicyNetwork
+    _target_: play_lmp.policies.LSTMPolicyNetwork
     d_obs: ${model.d_obs}
     d_latent_plan: ${model.d_latent}
     d_action: ${model.d_action}

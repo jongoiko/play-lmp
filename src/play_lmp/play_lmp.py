@@ -1,3 +1,4 @@
+import abc
 import dataclasses
 from typing import Literal
 
@@ -11,7 +12,89 @@ from jaxtyping import Float
 from jaxtyping import Int
 from jaxtyping import PyTree
 
-from ._play_lmp import PlayLMP
+
+class AbstractPlanRecognitionNetwork(eqx.Module):
+    @abc.abstractmethod
+    def __call__(
+        self,
+        observations: Float[Array, "time d_obs"],
+        actions: Float[Array, "time d_action"],
+        sequence_length: Int[Array, ""],
+    ) -> Float[Array, "2 d_latent"]:
+        raise NotImplementedError
+
+
+class AbstractPlanProposalNetwork(eqx.Module):
+    d_latent: eqx.AbstractVar[int]
+
+    @abc.abstractmethod
+    def __call__(
+        self,
+        observation: Float[Array, " d_obs"],
+        goal: Float[Array, " d_obs"],
+    ) -> Float[Array, "2 d_latent"]:
+        raise NotImplementedError
+
+
+class AbstractPolicyNetwork(eqx.Module):
+    @abc.abstractmethod
+    def __call__(
+        self,
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_obs"],
+        actions: Float[Array, "time d_action"],
+        plan: Float[Array, " d_latent"],
+    ) -> Float[Array, " time"]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def reset(self) -> PyTree:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def act(
+        self,
+        observation: Float[Array, " d_obs"],
+        goal: Float[Array, " d_obs"],
+        plan: Float[Array, " d_latent"],
+        key: jax.Array,
+        state: PyTree,
+    ) -> tuple[Float[Array, " d_action"], PyTree]:
+        raise NotImplementedError
+
+
+class PlayLMP(eqx.Module):
+    plan_recognizer: AbstractPlanRecognitionNetwork
+    plan_proposal: AbstractPlanProposalNetwork
+    policy: AbstractPolicyNetwork
+
+    def __init__(
+        self,
+        plan_recognizer: AbstractPlanRecognitionNetwork,
+        plan_proposal: AbstractPlanProposalNetwork,
+        policy: AbstractPolicyNetwork,
+    ):
+        self.plan_recognizer = plan_recognizer
+        self.plan_proposal = plan_proposal
+        self.policy = policy
+
+    def __call__(
+        self,
+        observations: Float[Array, "time d_obs"],
+        goal: Float[Array, " d_obs"],
+        actions: Float[Array, "time d_action"],
+        sequence_length: Int[Array, ""],
+    ) -> Float[Array, "2 2 d_latent"]:
+        sequence_plan = self.plan_recognizer(observations, actions, sequence_length)
+        state_goal_plan = self.plan_proposal(observations[0], goal)
+        return jnp.stack([sequence_plan, state_goal_plan])
+
+    def sample_plan(
+        self, params: Float[Array, "2 d_latent"], key: jax.Array
+    ) -> Float[Array, " d_latent"]:
+        eps = jax.random.normal(key, (params.shape[1],))
+        sampled = eps * params[1] + params[0]
+        return sampled
 
 
 @jax.tree_util.register_dataclass
@@ -35,13 +118,13 @@ def make_train_step(
     model, batch = mp_policy.cast_to_compute((model, batch))
     stats = {}
     if method == "play-gcbc":
-        loss_value, grads = eqx.filter_value_and_grad(play_gcbc_loss)(model, batch)
+        loss_value, grads = eqx.filter_value_and_grad(_play_gcbc_loss)(model, batch)
     elif method == "play-lmp":
-        loss_value, reconstruction_loss, kl_loss = play_lmp_loss(
+        loss_value, reconstruction_loss, kl_loss = _play_lmp_loss(
             model, batch, key, beta
         )
         grads = eqx.filter_grad(
-            lambda model, batch, key, beta: play_lmp_loss(model, batch, key, beta)[0]
+            lambda model, batch, key, beta: _play_lmp_loss(model, batch, key, beta)[0]
         )(model, batch, key, beta)
         stats = {"reconstruction_loss": reconstruction_loss, "kl_loss": kl_loss}
     updates, opt_state = optim.update(grads, opt_state, eqx.filter(model, eqx.is_array))
@@ -49,7 +132,7 @@ def make_train_step(
     return model, opt_state, loss_value, stats
 
 
-def play_lmp_loss(
+def _play_lmp_loss(
     model: PlayLMP, batch: EpisodeBatch, key: jax.Array, beta: float
 ) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:
     def instance_loss(
@@ -68,7 +151,7 @@ def play_lmp_loss(
             action_log_likelihoods,
             where=jnp.arange(observations.shape[0]) < episode_length,
         )
-        kl_loss = kl_div_diagonal_gaussians(posterior_plan_params, prior_plan_params)
+        kl_loss = _kl_div_diagonal_gaussians(posterior_plan_params, prior_plan_params)
         return action_reconstruction_loss, kl_loss
 
     action_reconstruction_losses, kl_losses = jax.vmap(instance_loss)(
@@ -81,7 +164,7 @@ def play_lmp_loss(
     return loss, jnp.mean(action_reconstruction_losses), jnp.mean(kl_losses)
 
 
-def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
+def _play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
     def instance_loss(
         observations: Float[Array, "time d_obs"],
         actions: Float[Array, "time d_action"],
@@ -107,7 +190,7 @@ def play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
     return jnp.sum(batch_losses) / jnp.sum(batch.episode_lengths)
 
 
-def kl_div_diagonal_gaussians(
+def _kl_div_diagonal_gaussians(
     gaussian_params_p: Float[Array, "2 d_latent"],
     gaussian_params_q: Float[Array, "2 d_latent"],
 ) -> Float[Array, ""]:

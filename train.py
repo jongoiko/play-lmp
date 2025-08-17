@@ -11,14 +11,17 @@ import minari
 import optax
 from jaxtyping import Array
 from jaxtyping import Float
+from jaxtyping import install_import_hook
 from omegaconf import DictConfig
-from play_lmp import EpisodeBatch
-from play_lmp import make_train_step
-from play_lmp import PlayLMP
-from play_lmp import preprocess_action
-from play_lmp import preprocess_observation
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
+
+with install_import_hook("play_lmp", "beartype.beartype"):
+    from play_lmp.play_lmp import EpisodeBatch
+    from play_lmp.play_lmp import make_train_step
+    from play_lmp.play_lmp import PlayLMP
+    from play_lmp.preprocessing import preprocess_action
+    from play_lmp.preprocessing import preprocess_observation
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
