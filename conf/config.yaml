@@ -36,7 +36,7 @@ model:
     d_obs: ${model.d_obs}
     d_action: ${model.d_action}
     d_latent: ${model.d_latent}
-    hidden_size: 1024
+    hidden_size: 512
   plan_proposal:
     _partial_: true
     _target_: play_lmp.MLPPlanProposalNetwork
@@ -50,7 +50,7 @@ model:
     d_obs: ${model.d_obs}
     d_latent_plan: ${model.d_latent}
     d_action: ${model.d_action}
-    hidden_size: 2048
+    hidden_size: 1024
     num_dl_mixture_elements: 6
     action_max_bound: ${model.target_action_max}
     action_min_bound: ${model.target_action_min}
