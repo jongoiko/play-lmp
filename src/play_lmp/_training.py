@@ -115,5 +115,8 @@ def kl_div_diagonal_gaussians(
     mean_q, stddev_q = gaussian_params_q
     var_p, var_q = jnp.square(stddev_p), jnp.square(stddev_q)
     return 0.5 * jnp.sum(
-        (var_p + jnp.square(mean_p - mean_q)) / var_q + jnp.log(var_q / var_p) - 1
+        (var_p + jnp.square(mean_p - mean_q)) / var_q
+        + jnp.log(var_q)
+        - jnp.log(var_p)
+        - 1
     )
