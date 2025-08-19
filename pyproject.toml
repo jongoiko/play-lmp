@@ -1,7 +1,7 @@
 [project]
 name = "play-lmp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Implementation of Play-GCBC and Play-LMP (Lynch et al., 2020)"
 readme = "README.md"
 authors = [
     { name = "Jon Goikoetxea", email = "jon.goikoetxea.m@gmail.com" }
