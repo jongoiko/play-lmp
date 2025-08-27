@@ -16,7 +16,6 @@ dependencies = [
     "jax[cuda12]>=0.7.0",
     "jaxtyping>=0.3.2",
     "jmp>=0.0.4",
-    "minari[all]>=0.5.3",
     "optax>=0.2.5",
     "tensorboardx>=2.6.4",
     "tqdm>=4.67.1",

@@ -1,13 +1,12 @@
 import datetime
 from pathlib import Path
+from typing import Literal
 
 import equinox as eqx
-import gymnasium as gym
 import hydra
 import jax
 import jax.numpy as jnp
 import jmp
-import minari
 import optax
 from jaxtyping import Array
 from jaxtyping import Float
@@ -27,8 +26,8 @@ with install_import_hook("play_lmp", "beartype.beartype"):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     random_key = jax.random.PRNGKey(cfg.random_seed)
-    dataset, _ = get_dataset_and_env(cfg, eval_env=True)
-    observation_stats, action_stats = get_normalization_stats(cfg)
+    dataset = get_dataset(cfg, fold="training")
+    observation_stats, action_stats = get_normalization_stats(cfg, dataset)
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, cfg.training.method, model_key)
     print(f"Total trainable parameters: {num_model_parameters(model):_}")
@@ -152,62 +151,80 @@ def get_batch(
 
 
 def preprocess_dataset(
-    dataset: minari.MinariDataset,
+    dataset: EpisodeBatch,
     observation_stats: Array,
     action_stats: Array,
     target_action_range: Array,
 ) -> EpisodeBatch:
-    padding_length = 1024
-    observations, actions, episode_lengths = [], [], []
-    for episode in tqdm(dataset, desc="Preprocessing dataset episodes"):
-        length = episode.truncations.size
-        episode_lengths.append(length)
-        observations.append(
-            jnp.pad(
-                episode.observations["observation"][:-1],
-                ((0, padding_length - length), (0, 0)),
-            )
-        )
-        actions.append(
-            jnp.pad(
-                episode.actions,
-                ((0, padding_length - length), (0, 0)),
-            )
-        )
-    observations = jnp.stack(observations)
-    actions = jnp.stack(actions)
     observations = jax.jit(
         jax.vmap(
             jax.vmap(preprocess_observation, in_axes=(0, None, None)),
             in_axes=(0, None, None),
         )
-    )(observations, observation_stats[0], observation_stats[1])
+    )(dataset.observations, observation_stats[0], observation_stats[1])
     actions = jax.jit(
         jax.vmap(
             jax.vmap(preprocess_action, in_axes=(0, None, None, None, None)),
             in_axes=(0, None, None, None, None),
         )
     )(
-        actions,
+        dataset.actions,
         action_stats[0],
         action_stats[1],
         target_action_range[0],
         target_action_range[1],
     )
+    return EpisodeBatch(observations, actions, dataset.episode_lengths)
+
+
+def get_dataset(
+    cfg: DictConfig, fold: Literal["training", "validation"]
+) -> EpisodeBatch:
+    dataset_path = Path(cfg.training.dataset_path) / fold
+    start_end_ids = jnp.load(dataset_path / "ep_start_end_ids.npy")
+    errors = 0
+    actions_key = "rel_actions" if cfg.training.relative_actions else "actions"
+    episode_actions, episode_observations = [], []
+    for episode_num, (start_id, end_id) in tqdm(
+        enumerate(start_end_ids), desc=f"Reading {fold} data"
+    ):
+        actions, observations = [], []
+        for id in tqdm(
+            range(start_id, end_id + 1),
+            desc=f"Reading episode {episode_num}",
+            leave=False,
+        ):
+            try:
+                step = jnp.load(dataset_path / f"episode_{str(id).zfill(7)}.npz")
+                actions.append(step[actions_key])
+                observations.append(
+                    jnp.concatenate([step["robot_obs"], step["scene_obs"]])
+                )
+            except Exception as _:
+                errors += 1
+        episode_actions.append(jnp.stack(actions))
+        episode_observations.append(jnp.stack(observations))
+    episode_lengths = [obs.shape[0] for obs in episode_observations]
+    max_episode_length = max(episode_lengths)
+    print(f"A total of {errors} steps could not be read.")
+    observations = jnp.stack(
+        [
+            jnp.pad(obs, ((0, max_episode_length - obs.shape[0]), (0, 0)))
+            for obs in episode_observations
+        ]
+    )
+    actions = jnp.stack(
+        [
+            jnp.pad(action, ((0, max_episode_length - action.shape[0]), (0, 0)))
+            for action in episode_actions
+        ]
+    )
     return EpisodeBatch(observations, actions, jnp.asarray(episode_lengths))
-
-
-def get_dataset_and_env(
-    cfg: DictConfig, eval_env: bool = False
-) -> tuple[minari.MinariDataset, gym.Env]:
-    dataset = minari.load_dataset("D4RL/kitchen/mixed-v2", download=True)
-    dataset.set_seed(cfg.random_seed)
-    env = dataset.recover_environment(render_mode="rgb_array", eval_env=eval_env)
-    return dataset, env
 
 
 def get_normalization_stats(
     cfg: DictConfig,
+    dataset: EpisodeBatch | None,
 ) -> tuple[Float[Array, "2 d_obs"], Float[Array, "2 d_action"]]:
     stats_path = Path(cfg.training.normalization_stats_path)
     if stats_path.exists():
@@ -217,34 +234,25 @@ def get_normalization_stats(
             jnp.asarray(stats["action"]),
         )
     stats_path.parent.mkdir(parents=True, exist_ok=True)
-    dataset, _ = get_dataset_and_env(cfg)
-    observation_episode_means = []
-    action_episode_max, action_episode_min = [], []
-    for episode in tqdm(dataset, desc="Calculating mean"):
-        observations = jnp.asarray(episode.observations["observation"])
-        actions = jnp.asarray(episode.actions)
-        observation_episode_means.append(observations.mean(axis=0))
-        action_episode_max.append(actions.max(axis=0))
-        action_episode_min.append(actions.min(axis=0))
-    observation_mean = jnp.mean(jnp.stack(observation_episode_means), axis=0)
-    action_max = jnp.max(jnp.stack(action_episode_max), axis=0)
-    action_min = jnp.min(jnp.stack(action_episode_min), axis=0)
-    action_stats = jnp.stack([action_max, action_min])
-    del (
-        observation_episode_means,
-        action_episode_max,
-        action_episode_min,
+    assert dataset is not None
+    observations, actions = [], []
+    for episode_idx, episode_length in enumerate(dataset.episode_lengths):
+        observations.append(dataset.observations[episode_idx, :episode_length])
+        actions.append(dataset.actions[episode_idx, :episode_length])
+    observations = jnp.concatenate(observations)
+    actions = jnp.concatenate(actions)
+    observation_stats = jnp.stack(
+        [
+            observations.mean(axis=0),
+            observations.std(axis=0),
+        ]
     )
-    observation_episode_variances = []
-    for episode in tqdm(dataset, desc="Calculating stddev"):
-        observations = jnp.asarray(episode.observations["observation"])
-        observation_episode_variances.append(
-            jnp.square(observations - observation_mean).mean(axis=0)
-        )
-    observation_std = jnp.sqrt(
-        jnp.mean(jnp.stack(observation_episode_variances), axis=0)
+    action_stats = jnp.stack(
+        [
+            actions.max(axis=0),
+            actions.min(axis=0),
+        ]
     )
-    observation_stats = jnp.stack([observation_mean, observation_std])
     jnp.savez(stats_path, observation=observation_stats, action=action_stats)
     return observation_stats, action_stats
 

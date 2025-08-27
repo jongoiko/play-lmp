@@ -2,6 +2,8 @@ random_seed: 42
 training:
   normalization_stats_path: normalization_stats.npz
   tensorboard_log_dir: logs/%Y-%m-%d_%H-%M-%S/
+  dataset_path: calvin/dataset/calvin_debug_dataset
+  relative_actions: True
   gcbc_window_length_min: 32
   gcbc_window_length_max: 64
   lmp_window_length: 64
@@ -20,9 +22,9 @@ training:
   save_model_every_n_steps: 200
   model_save_path: model.eqx
 model:
-  d_obs: 59
+  d_obs: 39
   d_latent: 64
-  d_action: 9
+  d_action: 7
   target_action_max:
     _target_: jax.numpy.ones
     _args_:
