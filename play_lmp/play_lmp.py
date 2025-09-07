@@ -132,6 +132,22 @@ def make_train_step(
     return model, opt_state, loss_value, stats
 
 
+def eval_loss(
+    model: PlayLMP,
+    mp_policy: jmp.Policy,
+    batch: EpisodeBatch,
+    key: jax.Array,
+    method: Literal["play-lmp", "play-gcbc"],
+    beta: float,
+) -> Float[Array, ""]:
+    model, batch = mp_policy.cast_to_compute((model, batch))
+    if method == "play-gcbc":
+        loss_value = _play_gcbc_loss(model, batch)
+    elif method == "play-lmp":
+        loss_value, _, _ = _play_lmp_loss(model, batch, key, beta)
+    return loss_value
+
+
 def _play_lmp_loss(
     model: PlayLMP, batch: EpisodeBatch, key: jax.Array, beta: float
 ) -> tuple[Float[Array, ""], Float[Array, ""], Float[Array, ""]]:

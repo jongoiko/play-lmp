@@ -19,8 +19,10 @@ training:
   num_steps: 50000
   method: play-lmp
   beta: 0.01
-  save_model_every_n_steps: 200
-  model_save_path: model.eqx
+  evaluation:
+    every_n_steps: 1000
+    model_save_path: model.eqx
+    num_val_batches: 256
 model:
   d_obs: 39
   d_latent: 64

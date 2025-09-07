@@ -18,6 +18,7 @@ from tqdm import tqdm
 with install_import_hook("play_lmp", "beartype.beartype"):
     from play_lmp.play_lmp import EpisodeBatch
     from play_lmp.play_lmp import make_train_step
+    from play_lmp.play_lmp import eval_loss
     from play_lmp.play_lmp import PlayLMP
     from play_lmp.preprocessing import preprocess_action
     from play_lmp.preprocessing import preprocess_observation
@@ -26,8 +27,9 @@ with install_import_hook("play_lmp", "beartype.beartype"):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     random_key = jax.random.PRNGKey(cfg.random_seed)
-    dataset = get_dataset(cfg, fold="training")
-    observation_stats, action_stats = get_normalization_stats(cfg, dataset)
+    train_dataset = get_dataset(cfg, fold="training")
+    val_dataset = get_dataset(cfg, fold="validation")
+    observation_stats, action_stats = get_normalization_stats(cfg, train_dataset)
     random_key, model_key = jax.random.split(random_key)
     model = get_model(cfg.model, cfg.training.method, model_key)
     print(f"Total trainable parameters: {num_model_parameters(model):_}")
@@ -42,14 +44,18 @@ def main(cfg: DictConfig) -> None:
             hydra.utils.instantiate(cfg.model.target_action_min),
         ]
     )
-    preprocessed_dataset = preprocess_dataset(
-        dataset, observation_stats, action_stats, target_action_range
+    preprocessed_train_dataset = preprocess_dataset(
+        train_dataset, observation_stats, action_stats, target_action_range
+    )
+    preprocessed_val_dataset = preprocess_dataset(
+        val_dataset, observation_stats, action_stats, target_action_range
     )
     train(
         cfg,
         model,
         optimizer,
-        preprocessed_dataset,
+        preprocessed_train_dataset,
+        preprocessed_val_dataset,
         mp_policy,
         key=random_key,
     )
@@ -70,7 +76,8 @@ def train(
     cfg: DictConfig,
     model: PlayLMP,
     optimizer: optax.GradientTransformation,
-    dataset: EpisodeBatch,
+    train_dataset: EpisodeBatch,
+    val_dataset: EpisodeBatch,
     mp_policy: jmp.Policy,
     key: jax.Array,
 ) -> None:
@@ -81,11 +88,7 @@ def train(
     )
     for step in range(cfg.training.num_steps):
         key, step_key = jax.random.split(key)
-        batch = get_batch(
-            cfg.training,
-            dataset,
-            step_key,
-        )
+        batch = get_batch(cfg.training, train_dataset, step_key)
         key, step_key = jax.random.split(key)
         model, opt_state, loss, stats = eqx.filter_jit(make_train_step)(
             model,
@@ -102,8 +105,29 @@ def train(
             tb_writer.add_scalar(f"step_{stats_key}/train", float(value), step)
         print(f"Step {step}: Training loss {loss}")
         tb_writer.flush()
-        if step % cfg.training.save_model_every_n_steps == 0:
-            eqx.tree_serialise_leaves(cfg.training.model_save_path, model)
+        if step % cfg.training.evaluation.every_n_steps == 0:
+            eqx.tree_serialise_leaves(cfg.training.evaluation.model_save_path, model)
+            inference_model = eqx.nn.inference_mode(model)
+            losses = []
+            for _ in tqdm(
+                range(cfg.training.evaluation.num_val_batches),
+                desc="Estimating validation loss",
+            ):
+                key, step_key = jax.random.split(key)
+                batch = get_batch(cfg.training, val_dataset, step_key)
+                losses.append(
+                    eqx.filter_jit(eval_loss)(
+                        inference_model,
+                        mp_policy,
+                        batch,
+                        step_key,
+                        cfg.training.method,
+                        cfg.training.beta,
+                    )
+                )
+            val_loss = jnp.asarray(losses).mean()
+            tb_writer.add_scalar("step_loss/val", float(val_loss), step)
+            print(f"Step {step}: Validation loss {val_loss}")
 
 
 def num_model_parameters(model: eqx.Module) -> int:
