@@ -1,3 +1,4 @@
+import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -33,7 +34,7 @@ class BidirectionalLSTMPlanRecognitionNetwork(AbstractPlanRecognitionNetwork):
         observations: Float[Array, "time d_obs"],
         actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
-    ) -> Float[Array, "2 d_latent"]:
+    ) -> distrax.Distribution:
         padded_sequence_length = observations.shape[0]
         input_features = jnp.concat(
             [
@@ -76,7 +77,7 @@ class BidirectionalLSTMPlanRecognitionNetwork(AbstractPlanRecognitionNetwork):
             self.linear(feature_vector), "(x d_latent) -> x d_latent", x=2
         )
         stddev = jax.nn.softplus(stddev) + 1e-8
-        return jnp.stack([mean, stddev])
+        return distrax.MultivariateNormalDiag(mean, stddev)
 
 
 class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
@@ -98,9 +99,9 @@ class MLPPlanProposalNetwork(AbstractPlanProposalNetwork):
         self,
         observation: Float[Array, " d_obs"],
         goal: Float[Array, " d_obs"],
-    ) -> Float[Array, "2 d_latent"]:
+    ) -> distrax.Distribution:
         mean, stddev = rearrange(
             self.mlp(jnp.concat([observation, goal])), "(x d_latent) -> x d_latent", x=2
         )
         stddev = jax.nn.softplus(stddev) + 1e-8
-        return jnp.stack([mean, stddev])
+        return distrax.MultivariateNormalDiag(mean, stddev)

@@ -2,6 +2,7 @@ import abc
 import dataclasses
 from typing import Literal
 
+import distrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -20,7 +21,7 @@ class AbstractPlanRecognitionNetwork(eqx.Module):
         observations: Float[Array, "time d_obs"],
         actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
-    ) -> Float[Array, "2 d_latent"]:
+    ) -> distrax.Distribution:
         raise NotImplementedError
 
 
@@ -32,7 +33,7 @@ class AbstractPlanProposalNetwork(eqx.Module):
         self,
         observation: Float[Array, " d_obs"],
         goal: Float[Array, " d_obs"],
-    ) -> Float[Array, "2 d_latent"]:
+    ) -> distrax.Distribution:
         raise NotImplementedError
 
 
@@ -84,17 +85,15 @@ class PlayLMP(eqx.Module):
         goal: Float[Array, " d_obs"],
         actions: Float[Array, "time d_action"],
         sequence_length: Int[Array, ""],
-    ) -> Float[Array, "2 2 d_latent"]:
+    ) -> tuple[distrax.Distribution, distrax.Distribution]:
         sequence_plan = self.plan_recognizer(observations, actions, sequence_length)
         state_goal_plan = self.plan_proposal(observations[0], goal)
-        return jnp.stack([sequence_plan, state_goal_plan])
+        return sequence_plan, state_goal_plan
 
     def sample_plan(
-        self, params: Float[Array, "2 d_latent"], key: jax.Array
+        self, distrib: distrax.Distribution, key: jax.Array
     ) -> Float[Array, " d_latent"]:
-        eps = jax.random.normal(key, (params.shape[1],))
-        sampled = eps * params[1] + params[0]
-        return sampled
+        return distrib.sample(seed=key)
 
 
 @jax.tree_util.register_dataclass
@@ -158,16 +157,16 @@ def _play_lmp_loss(
         key: jax.Array,
     ) -> tuple[Float[Array, ""], Float[Array, ""]]:
         goal = observations[episode_length - 1]
-        posterior_plan_params, prior_plan_params = model(
+        posterior_plan_distrib, prior_plan_distrib = model(
             observations, goal, actions, episode_length
         )
-        sampled_plan = model.sample_plan(posterior_plan_params, key)
+        sampled_plan = model.sample_plan(posterior_plan_distrib, key)
         action_log_likelihoods = model.policy(observations, goal, actions, sampled_plan)
         action_reconstruction_loss = -jnp.mean(
             action_log_likelihoods,
             where=jnp.arange(observations.shape[0]) < episode_length,
         )
-        kl_loss = _kl_div_diagonal_gaussians(posterior_plan_params, prior_plan_params)
+        kl_loss = jnp.asarray(posterior_plan_distrib.kl_divergence(prior_plan_distrib))
         return action_reconstruction_loss, kl_loss
 
     action_reconstruction_losses, kl_losses = jax.vmap(instance_loss)(
@@ -204,18 +203,3 @@ def _play_gcbc_loss(model: PlayLMP, batch: EpisodeBatch) -> Float[Array, ""]:
         batch.episode_lengths,
     )
     return jnp.sum(batch_losses) / jnp.sum(batch.episode_lengths)
-
-
-def _kl_div_diagonal_gaussians(
-    gaussian_params_p: Float[Array, "2 d_latent"],
-    gaussian_params_q: Float[Array, "2 d_latent"],
-) -> Float[Array, ""]:
-    mean_p, stddev_p = gaussian_params_p
-    mean_q, stddev_q = gaussian_params_q
-    var_p, var_q = jnp.square(stddev_p), jnp.square(stddev_q)
-    return 0.5 * jnp.sum(
-        (var_p + jnp.square(mean_p - mean_q)) / var_q
-        + jnp.log(var_q)
-        - jnp.log(var_p)
-        - 1
-    )
