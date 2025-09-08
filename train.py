@@ -108,24 +108,29 @@ def train(
         if step % cfg.training.evaluation.every_n_steps == 0:
             eqx.tree_serialise_leaves(cfg.training.evaluation.model_save_path, model)
             inference_model = eqx.nn.inference_mode(model)
-            losses = []
+            losses, stats = [], {}
             for _ in tqdm(
                 range(cfg.training.evaluation.num_val_batches),
                 desc="Estimating validation loss",
             ):
                 key, step_key = jax.random.split(key)
                 batch = get_batch(cfg.training, val_dataset, step_key)
-                losses.append(
-                    eqx.filter_jit(eval_loss)(
-                        inference_model,
-                        mp_policy,
-                        batch,
-                        step_key,
-                        cfg.training.method,
-                        cfg.training.beta,
-                    )
+                loss, batch_stats = eqx.filter_jit(eval_loss)(
+                    inference_model,
+                    mp_policy,
+                    batch,
+                    step_key,
+                    cfg.training.method,
+                    cfg.training.beta,
                 )
+                losses.append(loss)
+                for stats_key, value in batch_stats.items():
+                    stats[stats_key] = stats.get(stats_key, []) + [value]
             val_loss = jnp.asarray(losses).mean()
+            for stats_key, value in stats.items():
+                tb_writer.add_scalar(
+                    f"step_{stats_key}/val", jnp.asarray(value).mean(), step
+                )
             tb_writer.add_scalar("step_loss/val", float(val_loss), step)
             print(f"Step {step}: Validation loss {val_loss}")
 

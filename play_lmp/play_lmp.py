@@ -138,13 +138,17 @@ def eval_loss(
     key: jax.Array,
     method: Literal["play-lmp", "play-gcbc"],
     beta: float,
-) -> Float[Array, ""]:
+) -> tuple[Float[Array, ""], dict]:
     model, batch = mp_policy.cast_to_compute((model, batch))
+    stats = {}
     if method == "play-gcbc":
         loss_value = _play_gcbc_loss(model, batch)
     elif method == "play-lmp":
-        loss_value, _, _ = _play_lmp_loss(model, batch, key, beta)
-    return loss_value
+        loss_value, reconstruction_loss, kl_loss = _play_lmp_loss(
+            model, batch, key, beta
+        )
+        stats = {"reconstruction_loss": reconstruction_loss, "kl_loss": kl_loss}
+    return loss_value, stats
 
 
 def _play_lmp_loss(
