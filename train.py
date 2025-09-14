@@ -1,4 +1,5 @@
 import datetime
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -140,6 +141,7 @@ def num_model_parameters(model: eqx.Module) -> int:
     return sum(leaf.size for leaf in jax.tree_util.tree_leaves(filtered_model))
 
 
+@partial(jax.jit, static_argnums=[0])
 def get_batch(
     cfg: DictConfig,
     dataset: EpisodeBatch,
@@ -167,7 +169,6 @@ def get_batch(
     )
     episode_lengths = jnp.minimum(episode_lengths - start_indices, window_lengths)
 
-    @jax.jit
     def take_slice(arr: Array) -> Array:
         indices = start_indices.reshape(-1, 1) + jnp.arange(max_episode_length)
         return arr[jnp.arange(arr.shape[0]).reshape(-1, 1), indices]
