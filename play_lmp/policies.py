@@ -114,7 +114,7 @@ class MLPPolicyNetwork(AbstractPolicyNetwork):
 
 class LSTMPolicyNetwork(AbstractPolicyNetwork):
     cell: eqx.nn.LSTMCell
-    mlp: eqx.nn.Sequential
+    mlp: eqx.nn.MLP
     num_dl_mixture_elements: int
     action_max_bound: Float[Array, " d_action"]
     action_min_bound: Float[Array, " d_action"]
@@ -125,7 +125,9 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
         d_obs: int,
         d_latent_plan: int,
         d_action: int,
-        hidden_size: int,
+        lstm_hidden_size: int,
+        mlp_width_size: int,
+        mlp_depth: int,
         num_dl_mixture_elements: int,
         action_max_bound: Float[Array, " d_action"],
         action_min_bound: Float[Array, " d_action"],
@@ -134,17 +136,14 @@ class LSTMPolicyNetwork(AbstractPolicyNetwork):
     ):
         lstm_key, mlp_key = jax.random.split(key)
         self.cell = eqx.nn.LSTMCell(
-            2 * d_obs + d_latent_plan, hidden_size, key=lstm_key
+            2 * d_obs + d_latent_plan, lstm_hidden_size, key=lstm_key
         )
-        mlp_keys = jax.random.split(mlp_key, 2)
-        self.mlp = eqx.nn.Sequential(
-            [
-                eqx.nn.Linear(self.cell.hidden_size, 512, key=mlp_keys[0]),
-                eqx.nn.Lambda(jax.nn.relu),
-                eqx.nn.Linear(
-                    512, 3 * num_dl_mixture_elements * d_action, key=mlp_keys[1]
-                ),
-            ]
+        self.mlp = eqx.nn.MLP(
+            self.cell.hidden_size,
+            3 * num_dl_mixture_elements * d_action,
+            mlp_width_size,
+            mlp_depth,
+            key=mlp_key,
         )
         self.num_dl_mixture_elements = num_dl_mixture_elements
         self.action_max_bound = action_max_bound

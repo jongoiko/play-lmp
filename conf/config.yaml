@@ -56,7 +56,9 @@ model:
     d_obs: ${model.d_obs}
     d_latent_plan: ${model.d_latent}
     d_action: ${model.d_action}
-    hidden_size: 256
+    lstm_hidden_size: 128
+    mlp_width_size: 128
+    mlp_depth: 3
     num_dl_mixture_elements: 6
     action_max_bound: ${model.target_action_max}
     action_min_bound: ${model.target_action_min}
