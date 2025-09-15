@@ -148,8 +148,12 @@ def get_batch(
     key: jax.Array,
 ) -> EpisodeBatch:
     key, sampling_key = jax.random.split(key)
-    episode_indices = jax.random.randint(
-        sampling_key, (cfg.batch_size,), 0, dataset.observations.shape[0]
+    all_episode_lengths = dataset.episode_lengths
+    episode_indices = jax.random.choice(
+        sampling_key,
+        int(all_episode_lengths.shape[0]),
+        (cfg.batch_size,),
+        p=all_episode_lengths / all_episode_lengths.sum(),
     )
     observations = dataset.observations[episode_indices]
     actions = dataset.actions[episode_indices]
