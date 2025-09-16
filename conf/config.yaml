@@ -15,8 +15,8 @@ training:
       - _target_: optax.clip_by_global_norm
         max_norm: 1.0
       - _target_: optax.adamw
-        learning_rate: 1e-3
-  num_steps: 20001
+        learning_rate: 3e-4
+  num_steps: 50001
   method: play-lmp
   beta: 0.01
   evaluation:
@@ -42,13 +42,13 @@ model:
     d_obs: ${model.d_obs}
     d_action: ${model.d_action}
     d_latent: ${model.d_latent}
-    hidden_size: 128
+    hidden_size: 256
   plan_proposal:
     _partial_: true
     _target_: play_lmp.encoders.MLPPlanProposalNetwork
     d_obs: ${model.d_obs}
     d_latent: ${model.d_latent}
-    width_size: 128
+    width_size: 512
     depth: 3
   policy:
     _partial_: true
@@ -56,10 +56,10 @@ model:
     d_obs: ${model.d_obs}
     d_latent_plan: ${model.d_latent}
     d_action: ${model.d_action}
-    lstm_hidden_size: 128
+    lstm_hidden_size: 512
     mlp_width_size: 128
-    mlp_depth: 3
-    num_dl_mixture_elements: 6
+    mlp_depth: 0
+    num_dl_mixture_elements: 10
     action_max_bound: ${model.target_action_max}
     action_min_bound: ${model.target_action_min}
     num_action_bins: 256
