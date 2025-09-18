@@ -5,7 +5,7 @@ This repo is an implementation the self-supervised policy learning methods Play-
 The GIF below shows a trained Play-LMP policy [executing a series of tasks](#running-a-trained-policy) in CALVIN environment D.
 By passing different goal states as inputs, a single policy is able to solve multiple tasks:
 grasp and displace blocks, open and close the drawer/cabinet, push the button and turn on the light by flipping the switch.
-We also observe emergent "retrying" behavior, where the policy will re-attempt a task if it fails in its first try (in the GIF, for example, when grasping blocks and when trying to close the drawer).
+We also observe emergent "retrying" behavior, where the policy will re-attempt a task if it fails in its first try (in the GIF, for example, when grasping blocks and when trying to open the drawer).
 
 <p align="center">
   <img src="./media/play_lmp_rollout.gif" />
